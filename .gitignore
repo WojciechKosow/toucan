@@ -31,3 +31,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Toucan ###
+# Locally published animation bundles (regenerated at runtime)
+published/

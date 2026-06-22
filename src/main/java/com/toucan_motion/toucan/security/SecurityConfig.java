@@ -43,6 +43,10 @@ public class SecurityConfig {
                         auth ->
                                 auth.requestMatchers("/api/auth/**")
                                         .permitAll()
+                                        // Hosted animation previews are public so the links are
+                                        // shareable and embeddable (the v0.1 hero deliverable).
+                                        .requestMatchers("/preview/**")
+                                        .permitAll()
                                         .requestMatchers("/api/admin/**")
                                         .hasRole("ADMIN")
                                         .anyRequest()
