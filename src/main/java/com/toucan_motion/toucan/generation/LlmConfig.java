@@ -22,7 +22,7 @@ public class LlmConfig {
             @Value("${openai.api.key:}") String openAiKey,
             @Value("${openai.model:gpt-4.1}") String openAiModel,
             @Value("${openai.max-tokens:16000}") int openAiMaxTokens,
-            @Value("${openai.temperature:0.5}") double openAiTemperature,
+            @Value("${openai.temperature:0.7}") double openAiTemperature,
             @Value("${openai.base-url:https://api.openai.com/v1}") String openAiBaseUrl,
             @Value("${anthropic.api.key:}") String anthropicKey,
             @Value("${anthropic.model:claude-opus-4-8}") String anthropicModel,
