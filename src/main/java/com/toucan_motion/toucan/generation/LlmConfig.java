@@ -20,9 +20,9 @@ public class LlmConfig {
     public LlmClient llmClient(
             @Value("${llm.provider:auto}") String provider,
             @Value("${openai.api.key:}") String openAiKey,
-            @Value("${openai.model:gpt-4o}") String openAiModel,
-            @Value("${openai.max-tokens:8000}") int openAiMaxTokens,
-            @Value("${openai.temperature:0.6}") double openAiTemperature,
+            @Value("${openai.model:gpt-4.1}") String openAiModel,
+            @Value("${openai.max-tokens:16000}") int openAiMaxTokens,
+            @Value("${openai.temperature:0.5}") double openAiTemperature,
             @Value("${openai.base-url:https://api.openai.com/v1}") String openAiBaseUrl,
             @Value("${anthropic.api.key:}") String anthropicKey,
             @Value("${anthropic.model:claude-opus-4-8}") String anthropicModel,
