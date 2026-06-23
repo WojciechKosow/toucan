@@ -4,6 +4,7 @@ import com.toucan_motion.toucan.dto.AnimationDTO;
 import com.toucan_motion.toucan.entity.Animation;
 import com.toucan_motion.toucan.entity.AnimationStatus;
 import com.toucan_motion.toucan.generation.AnimationGeneratorRegistry;
+import com.toucan_motion.toucan.generation.GeneratedAnimation;
 import com.toucan_motion.toucan.publishing.PublishingService;
 import com.toucan_motion.toucan.repository.AnimationRepository;
 import com.toucan_motion.toucan.request.CreateAnimationRequest;
@@ -34,9 +35,10 @@ public class AnimationServiceImpl implements AnimationService {
                                 .build());
 
         try {
-            String html = generators.get(request.getType()).generate(request.getPrompt());
-            String previewUrl = publishingService.publish(animation.getId(), html);
-            animation.setGeneratedCode(html);
+            GeneratedAnimation generated = generators.get(request.getType()).generate(request.getPrompt());
+            String previewUrl = publishingService.publish(animation.getId(), generated.html());
+            animation.setGeneratedCode(generated.html());
+            animation.setSpecJson(generated.specJson());
             animation.setPreviewUrl(previewUrl);
             animation.setStatus(AnimationStatus.READY);
         } catch (RuntimeException e) {

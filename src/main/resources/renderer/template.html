@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@@TITLE@@</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100%; background: var(--bg, #0b0f1a);
+    font-family: var(--font-sans, system-ui, sans-serif);
+    overflow: hidden;
+  }
+  /* Fixed 16:9 stage; scales to fit any viewport while keeping the 1280x720 design space. */
+  #toucan-stage {
+    position: relative; width: 1280px; height: 720px;
+    transform-origin: center center;
+  }
+</style>
+</head>
+<body>
+  <div id="toucan-stage"></div>
+
+  <script id="toucan-spec" type="application/json">@@SPEC_JSON@@</script>
+  <script id="toucan-theme" type="application/json">@@THEME_JSON@@</script>
+
+  <script>
+/* === Toucan renderer (this animation type) === */
+@@RENDERER_JS@@
+  </script>
+  <script>
+/* === Toucan runtime: theme, master clock, seek harness === */
+@@RUNTIME_JS@@
+  </script>
+</body>
+</html>
