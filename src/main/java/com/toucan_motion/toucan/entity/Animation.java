@@ -33,6 +33,13 @@ public class Animation {
     @Column(columnDefinition = "text")
     private String generatedCode;
 
+    /**
+     * The validated JSON spec the animation was rendered from. Persisted so the deferred timeline
+     * editor / style-memory features can edit the spec and re-render without re-prompting the model.
+     */
+    @Column(columnDefinition = "text")
+    private String specJson;
+
     /** Public URL of the hosted, running preview. */
     private String previewUrl;
 

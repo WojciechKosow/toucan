@@ -3,8 +3,9 @@ package com.toucan_motion.toucan.generation;
 import com.toucan_motion.toucan.entity.AnimationType;
 
 /**
- * One strategy per animation type. Each generator owns its constrained prompt template (where output
- * quality lives) and a deterministic stub used when no model is configured.
+ * One strategy per animation type. Each generator owns its constrained, schema-shaped prompt (the LLM
+ * returns a JSON <em>spec</em>, never animation code) and a deterministic stub spec used when no model
+ * is configured. The shared, hand-built renderer turns the validated spec into the final bundle.
  */
 public interface AnimationGenerator {
 
@@ -12,10 +13,11 @@ public interface AnimationGenerator {
     AnimationType type();
 
     /**
-     * Produces a complete, self-contained HTML document for the given user description.
+     * Produces a complete, self-contained HTML bundle (plus the validated spec it was rendered from)
+     * for the given user description.
      *
      * @param description the user's natural-language prompt
-     * @return a single self-contained HTML document (no external network dependencies)
+     * @return the rendered bundle and its canonical spec JSON
      */
-    String generate(String description);
+    GeneratedAnimation generate(String description);
 }
