@@ -32,6 +32,15 @@ build/
 ### VS Code ###
 .vscode/
 
+### Node / Remotion (polyglot monorepo) ###
+node_modules/
+# Rendered MP4 output from the renderer service
+renderer/out/
+out/
+# Remotion's downloaded headless browser + caches
+.remotion/
+*.tsbuildinfo
+
 ### Toucan ###
 # Locally published animation bundles (regenerated at runtime)
 published/
