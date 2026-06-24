@@ -1,14 +1,14 @@
 // @toucan/spec — the single definition of the SceneSpec wire contract.
 //
-// Placeholder for Section 0. Section 1 fills this in with the zod schema and
-// types for the element + edge + timeline IR (closed vocabularies for element
-// `kind` and timeline `verb`), plus the exported JSON Schema artifact that the
-// Spring Boot validator mirrors.
-//
-// Contract invariants (enforced from Section 1):
-//   - elements/edges/timeline only; NO coordinates anywhere (positions come from
-//     auto-layout).
-//   - referential integrity: every edge.from/to and timeline.target resolves.
-//   - kind/verb dispatch via a registry, never an inline switch.
+// element + edge + timeline IR with closed vocabularies for element `kind` and
+// timeline `verb`. NO coordinates anywhere (positions come from auto-layout).
+// Referential integrity (every edge endpoint / group member / timeline target
+// resolves) is enforced in SceneSpecSchema's superRefine. The Spring Boot
+// SceneSpecValidator mirrors these rules; schema/scene-spec.schema.json is the
+// exported JSON Schema artifact (structure + vocab only — refinements live in code).
 
 export const SPEC_PACKAGE = "@toucan/spec";
+
+export * from "./vocab.js";
+export * from "./scene-spec.js";
+export * from "./validate.js";

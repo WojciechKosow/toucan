@@ -36,6 +36,8 @@ jobs:
         run: npm run build
       - name: Lint
         run: npm run lint
+      - name: Test workspaces (SceneSpec contract)
+        run: npm test
       - name: Ensure Remotion headless browser
         run: npx --workspace @toucan/renderer remotion browser ensure
       - name: Render throwaway composition (gate)

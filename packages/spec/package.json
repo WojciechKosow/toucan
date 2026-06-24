@@ -11,14 +11,17 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "lint": "prettier --check \"src/**/*.ts\"",
-    "test": "echo \"(SceneSpec schema + tests land in Section 1)\" && exit 0"
+    "lint": "prettier --check \"src/**/*.ts\" \"scripts/**/*.ts\"",
+    "gen:schema": "tsx scripts/gen-schema.ts",
+    "test": "node --test --import tsx \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "zod": "^3.23.0"
+    "zod": "3.23.8",
+    "zod-to-json-schema": "3.23.5"
   },
   "devDependencies": {
     "prettier": "^3.3.0",
+    "tsx": "4.19.2",
     "typescript": "^5.5.0"
   }
 }
