@@ -2,7 +2,7 @@
 // the toolchain renders an MP4. The real Scene kit (node/edge/label/group + verb
 // animators) is registered here from Section 3 onward.
 import { Composition } from "remotion";
-import { MovingBox } from "./throwaway/MovingBox.js";
+import { MovingBox } from "./throwaway/MovingBox";
 
 export const RemotionRoot = () => {
   return (
