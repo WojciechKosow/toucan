@@ -298,19 +298,54 @@ Notes:
 
 ---
 
-## 6. Open decisions (need confirmation — see build-plan §Decisions)
+## 6. Locked decisions (settled — do not re-litigate)
 
-1. **Layout engine**: `@dagrejs/dagre` (recommended for v0.1: light, great for
-   layered/linear flows = 8/10 topics) vs `elkjs` (ports, orthogonal routing,
-   nesting — heavier).
-2. **Drop the user-chosen `AnimationType`?** The vision says the engine composes
-   from the kit regardless of topic, implying `create` no longer takes a `type`.
-   Confirm we remove it (with a migration) vs. keep it as an optional hint.
-3. **Hosting / queue**: v0.1 single-box (Spring + Node same host, HTTP +
-   DB job table, local-FS storage) vs. introduce a broker (Redis/BullMQ, SQS) and
-   R2 now.
-4. **LLM provider/model** for spec generation: current default is
-   OpenAI `gpt-4.1`; Anthropic `claude-opus-4-8` is wired and available.
-5. **The exact 10 topics** (see build-plan).
-</content>
-</invoke>
+Reviewed and approved. These are final for v0.1; a future session must treat them
+as settled.
+
+1. **Layout engine: `@dagrejs/dagre`.** `elkjs` is deferred — revisit only if a
+   fixture genuinely needs ports / orthogonal routing / nested groups.
+2. **`AnimationType` is removed from the user-facing `create` API** (with a
+   migration). `create` takes `prompt` + theme params only. Topic classification
+   survives *only* as an optional **internal director hint** (to pick a layout
+   direction or a few-shot example) — never a user-facing choice.
+3. **Hosting/queue: single-box for v0.1.** Spring + Node on the same host, HTTP
+   dispatch + the `render_jobs` DB table as the source of truth, local-FS storage
+   behind `PublishingService`. **No broker.** The documented upgrade path holds:
+   when a queue is introduced later, the job-table + callback contract stay
+   identical — only the transport changes.
+4. **LLM provider: decided empirically in Section 5, not now.** Run both
+   `gpt-4.1` and `claude-opus-4-8` against all 10 fixture prompts and pick
+   whichever yields valid `SceneSpec`s with fewer repair reprompts. The keyless
+   `StubLlmClient` path stays working throughout.
+5. **The 10 topics are confirmed exactly** as listed in `build-plan.md` §6.
+
+### Required artifact: `docs/visual-style.md` (gate before Section 3)
+The visual language is **not improvised**. Before any kit composition is built,
+`docs/visual-style.md` must exist, defining concrete tokens (palette, type scale,
+spacing, corner radii, easing curves, motion durations) and a **frame-by-frame
+definition of each verb** (`packet.travel`, `node.state`, `camera.focus`,
+`highlight`, `edge.draw`). Section 3 builds *to this spec*, not toward a
+subjective "looks good" bar. (The spec is provided by the maintainer at the
+Section 2 gate.)
+
+### Layout has an aesthetic pass, not just correctness (Section 2)
+Raw `dagre` output looks machine-placed — the exact tell of "auto-generated."
+After raw layout, a **deterministic aesthetic-normalization pass** centers the
+graph on the stage, equalizes spacing, adds margins/breathing room, and snaps to
+a grid. Determinism is preserved (same spec → byte-identical output).
+
+### Confirmed build order
+```
+0  scaffold polyglot monorepo
+1  SceneSpec contract + validation
+F  Flyway baseline               ← split out of Section 4, own gate
+2  deterministic auto-layout + aesthetic-normalization pass
+V  author docs/visual-style.md   ← gate before Section 3 (provided by maintainer)
+3  core kit compositions + theme (build to the visual style spec)
+4  orchestration spine (async jobs, storage)
+5  AI director + provider bake-off
+6  climb to 10 fixtures
+7  live preview frontend (optional for v0.1)
+8  productionization
+```
