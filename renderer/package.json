@@ -1,0 +1,28 @@
+{
+  "name": "@toucan/renderer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node + Remotion render service. Receives a validated SceneSpec, runs deterministic auto-layout, renders frames, exports MP4.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "prettier --check \"src/**/*.{ts,tsx}\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\"",
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts MovingBox out/throwaway.mp4",
+    "test": "echo \"(no renderer tests yet — added in Section 2)\" && exit 0"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.482",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.482"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "prettier": "^3.3.0",
+    "typescript": "^5.5.0"
+  }
+}
