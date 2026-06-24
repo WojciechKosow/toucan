@@ -30,30 +30,20 @@ public class FlowSpec implements AnimationSpec {
         private String id;
         private String label;
         private String sublabel;
+        /**
+         * Optional icon name from the closed vocabulary the renderer supports. Unknown/missing
+         * values render a neutral fallback ring — never an error.
+         */
+        private String icon;
 
-        public String getId() {
-            return id;
-        }
-
-        public void setId(String id) {
-            this.id = id;
-        }
-
-        public String getLabel() {
-            return label;
-        }
-
-        public void setLabel(String label) {
-            this.label = label;
-        }
-
-        public String getSublabel() {
-            return sublabel;
-        }
-
-        public void setSublabel(String sublabel) {
-            this.sublabel = sublabel;
-        }
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+        public String getLabel() { return label; }
+        public void setLabel(String label) { this.label = label; }
+        public String getSublabel() { return sublabel; }
+        public void setSublabel(String sublabel) { this.sublabel = sublabel; }
+        public String getIcon() { return icon; }
+        public void setIcon(String icon) { this.icon = icon; }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
