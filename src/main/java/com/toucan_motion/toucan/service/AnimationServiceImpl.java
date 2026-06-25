@@ -3,52 +3,69 @@ package com.toucan_motion.toucan.service;
 import com.toucan_motion.toucan.dto.AnimationDTO;
 import com.toucan_motion.toucan.entity.Animation;
 import com.toucan_motion.toucan.entity.AnimationStatus;
-import com.toucan_motion.toucan.generation.AnimationGeneratorRegistry;
-import com.toucan_motion.toucan.generation.GeneratedAnimation;
-import com.toucan_motion.toucan.publishing.PublishingService;
+import com.toucan_motion.toucan.entity.User;
 import com.toucan_motion.toucan.repository.AnimationRepository;
+import com.toucan_motion.toucan.repository.UserRepository;
 import com.toucan_motion.toucan.request.CreateAnimationRequest;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 @RequiredArgsConstructor
 public class AnimationServiceImpl implements AnimationService {
 
     private final AnimationRepository animationRepository;
-    private final AnimationGeneratorRegistry generators;
-    private final PublishingService publishingService;
+    private final UserRepository userRepository;
+    private final AnimationProcessor animationProcessor;
+
+    /** Per-user minimum gap between generations (the dormant User.lastGeneration hook). 0 disables. */
+    @Value("${app.ratelimit.generation-cooldown-seconds:0}")
+    private long cooldownSeconds;
 
     @Override
     public AnimationDTO create(UUID userId, CreateAnimationRequest request) {
-        // Persist first so a record exists even if generation fails. Deliberately not @Transactional:
-        // the LLM call can take many seconds and we don't want to hold a DB connection across it.
-        Animation animation =
-                animationRepository.save(
-                        Animation.builder()
-                                .userId(userId)
-                                .type(request.getType())
-                                .prompt(request.getPrompt())
-                                .status(AnimationStatus.GENERATING)
-                                .build());
+        // Reserve the slot (rate-limit + a committed PENDING row), then hand off to the async worker.
+        // create() is intentionally non-transactional: each save commits on its own so the PENDING row
+        // is visible to the worker thread, and the LLM/render work happens entirely outside any tx.
+        Animation animation = reserve(userId, request);
+        animationProcessor.process(animation.getId());
+        return mapToDTO(animation);
+    }
 
-        try {
-            GeneratedAnimation generated = generators.get(request.getType()).generate(request.getPrompt());
-            String previewUrl = publishingService.publish(animation.getId(), generated.html());
-            animation.setGeneratedCode(generated.html());
-            animation.setSpecJson(generated.specJson());
-            animation.setPreviewUrl(previewUrl);
-            animation.setStatus(AnimationStatus.READY);
-        } catch (RuntimeException e) {
-            animation.setStatus(AnimationStatus.FAILED);
-            animation.setErrorMessage(e.getMessage());
-            animationRepository.save(animation);
-            throw e;
+    private Animation reserve(UUID userId, CreateAnimationRequest request) {
+        User user =
+                userRepository
+                        .findById(userId)
+                        .orElseThrow(
+                                () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Unknown user."));
+        enforceRateLimit(user);
+        user.setLastGeneration(LocalDateTime.now());
+        userRepository.save(user);
+
+        return animationRepository.save(
+                Animation.builder()
+                        .userId(userId)
+                        .prompt(request.getPrompt())
+                        .status(AnimationStatus.PENDING)
+                        .build());
+    }
+
+    private void enforceRateLimit(User user) {
+        if (cooldownSeconds <= 0 || user.getLastGeneration() == null) {
+            return;
         }
-
-        return mapToDTO(animationRepository.save(animation));
+        LocalDateTime nextAllowed = user.getLastGeneration().plus(Duration.ofSeconds(cooldownSeconds));
+        if (LocalDateTime.now().isBefore(nextAllowed)) {
+            throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS, "Please wait before generating another animation.");
+        }
     }
 
     @Override
@@ -63,7 +80,8 @@ public class AnimationServiceImpl implements AnimationService {
         return animationRepository
                 .findByIdAndUserId(animationId, userId)
                 .map(this::mapToDTO)
-                .orElseThrow(() -> new RuntimeException("Animation not found."));
+                .orElseThrow(
+                        () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Animation not found."));
     }
 
     @Override
@@ -71,9 +89,13 @@ public class AnimationServiceImpl implements AnimationService {
         Animation animation =
                 animationRepository
                         .findByIdAndUserId(animationId, userId)
-                        .orElseThrow(() -> new RuntimeException("Animation not found."));
+                        .orElseThrow(
+                                () ->
+                                        new ResponseStatusException(
+                                                HttpStatus.NOT_FOUND, "Animation not found."));
         if (animation.getGeneratedCode() == null) {
-            throw new RuntimeException("This animation has no generated code to download.");
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND, "This animation has no generated code to download.");
         }
         return animation.getGeneratedCode();
     }
@@ -81,20 +103,25 @@ public class AnimationServiceImpl implements AnimationService {
     private AnimationDTO mapToDTO(Animation a) {
         return AnimationDTO.builder()
                 .id(a.getId())
-                .type(a.getType())
                 .prompt(a.getPrompt())
-                .previewUrl(a.getPreviewUrl())
-                .embedSnippet(a.getPreviewUrl() == null ? null : buildEmbedSnippet(a.getPreviewUrl()))
                 .status(a.getStatus())
+                .mp4Url(a.getMp4Url())
+                .posterUrl(a.getPosterUrl())
+                .durationMs(a.getDurationMs())
+                .embedSnippet(
+                        a.getMp4Url() == null ? null : buildEmbedSnippet(a.getMp4Url(), a.getPosterUrl()))
                 .errorMessage(a.getErrorMessage())
                 .createdAt(a.getCreatedAt())
                 .build();
     }
 
-    private String buildEmbedSnippet(String previewUrl) {
-        return "<iframe src=\""
-                + previewUrl
-                + "\" width=\"800\" height=\"450\" style=\"border:0;border-radius:8px\""
-                + " loading=\"lazy\" allowfullscreen></iframe>";
+    private String buildEmbedSnippet(String mp4Url, String posterUrl) {
+        String poster = posterUrl == null ? "" : " poster=\"" + posterUrl + "\"";
+        return "<video src=\""
+                + mp4Url
+                + "\""
+                + poster
+                + " width=\"1280\" height=\"720\" controls playsinline"
+                + " style=\"border:0;border-radius:8px;max-width:100%\"></video>";
     }
 }

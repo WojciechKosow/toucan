@@ -6,9 +6,10 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit",
-    "lint": "prettier --check \"src/**/*.{ts,tsx}\"",
-    "format": "prettier --write \"src/**/*.{ts,tsx}\"",
+    "lint": "prettier --check \"src/**/*.{ts,tsx,mjs}\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx,mjs}\"",
     "studio": "remotion studio src/index.ts",
+    "serve": "node src/render-service.mjs",
     "render": "remotion render src/index.ts MovingBox out/throwaway.mp4",
     "test": "echo \"(no renderer tests yet — added in Section 2)\" && exit 0"
   },

@@ -118,40 +118,56 @@ Base URL: `http://localhost:8080`
 
 | Method | Path                  | Description                                    |
 |--------|-----------------------|------------------------------------------------|
-| POST   | `/`                   | Create + generate an animation (synchronous)   |
+| POST   | `/`                   | Create an animation — **async**, returns `PENDING` immediately |
 | GET    | `/`                   | List your animations (newest first)            |
-| GET    | `/{id}`               | Get one animation                              |
-| GET    | `/{id}/download`      | Download the HTML (`Content-Disposition: attachment`) |
+| GET    | `/{id}`               | Get one animation (poll this for status)       |
+| GET    | `/{id}/download`      | Download the HTML (`Content-Disposition: attachment`) — legacy |
 
 **Create request body:**
 ```json
 {
-  "type": "FLOW",
   "prompt": "How an HTTP request travels from the browser to the database and back."
 }
 ```
-- `type` — required. One of `FLOW`, `CODE_BLOCK`, `DATA_STRUCTURE`. All three
-  generate real output in v0.1.
 - `prompt` — required, non-blank, max 4000 chars.
+- No `type` — locked decision 2 removed it. The user picks a prompt only; topic
+  classification survives solely as an optional internal director hint.
 
 **AnimationDTO response:**
 ```json
 {
   "id": "f1e2d3c4-...",
-  "type": "CODE_BLOCK",
-  "prompt": "Animate a binary search...",
-  "previewUrl": "http://localhost:8080/preview/f1e2d3c4-.../index.html",
-  "embedSnippet": "<iframe src=\"...\" width=\"800\" height=\"450\" ...></iframe>",
+  "prompt": "How an HTTP request travels...",
   "status": "READY",
+  "mp4Url": "http://localhost:8080/preview/f1e2d3c4-.../render.mp4",
+  "posterUrl": "http://localhost:8080/preview/f1e2d3c4-.../poster.png",
+  "durationMs": 3000,
+  "embedSnippet": "<video src=\"...\" poster=\"...\" controls ...></video>",
   "errorMessage": null,
   "createdAt": "2026-06-23T12:34:56"
 }
 ```
 
-**Status lifecycle:** `PENDING → GENERATING → READY` (or `FAILED`, with
-`errorMessage` populated). The create call runs generation inline, so the
-response you get back is already `READY` or `FAILED`. `previewUrl` /
-`embedSnippet` are `null` until the animation is `READY`.
+**Status lifecycle:** `POST` reserves a `PENDING` row and returns instantly; an
+async worker runs spec generation → validation → dispatch to the renderer, moving
+the row `PENDING → GENERATING`, then the renderer's callback drives it to `READY`
+(with `mp4Url` populated) or `FAILED` (with `errorMessage`). Poll
+`GET /api/animations/{id}` until terminal. `mp4Url` / `posterUrl` / `durationMs` /
+`embedSnippet` are `null` until `READY`.
+
+> v0.1 note: the renderer currently returns a **placeholder MP4** to prove the
+> async spine end-to-end. Real Remotion compositions land in Section 3.
+
+### Internal — `/api/internal/**` (service-to-service, not user JWT)
+
+| Method | Path                       | Description                                    |
+|--------|----------------------------|------------------------------------------------|
+| POST   | `/render-callback`         | The renderer's terminal callback (multipart)   |
+
+Authenticated by a shared secret in the **`X-Internal-Token`** header
+(`app.internal.render-token`), granting `ROLE_INTERNAL` — entirely separate from
+the user JWT. A `READY` callback uploads the MP4 (+ poster) straight through to
+the `PublishingService`; a `FAILED` callback carries the error. Not for end users.
 
 ---
 
@@ -206,17 +222,16 @@ Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "type": "FLOW",
   "prompt": "How an HTTP request travels from the browser to the database and back."
 }
 ```
-Response comes back `READY` with a `previewUrl`. Generation can take several
-seconds (it's a live LLM call), so expect the request to hang briefly.
+Response comes back **immediately** as `PENDING`. Poll `GET /api/animations/{id}`
+until `status` is `READY` (then `mp4Url` is set) or `FAILED` (then `errorMessage`).
 
 ### 4. Open the preview
 
-Paste the `previewUrl` straight into a browser — no auth needed. Or grab
-`embedSnippet` and drop it into any page.
+Once `READY`, paste the `mp4Url` straight into a browser — no auth needed. Or grab
+`embedSnippet` (a `<video>` tag) and drop it into any page.
 
 ### 5. List / fetch / download
 

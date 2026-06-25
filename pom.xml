@@ -34,9 +34,15 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-jpa</artifactId>
 		</dependency>
+		<!--
+		  Spring Boot 4 moved Flyway autoconfiguration into the dedicated
+		  spring-boot-flyway module; the starter pulls that (so FlywayAutoConfiguration
+		  actually runs at boot) plus flyway-core. flyway-database-postgresql adds
+		  Flyway 12's Postgres support module.
+		-->
 		<dependency>
-			<groupId>org.flywaydb</groupId>
-			<artifactId>flyway-core</artifactId>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
