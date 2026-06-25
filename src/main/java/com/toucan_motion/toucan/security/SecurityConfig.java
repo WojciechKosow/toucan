@@ -29,6 +29,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final InternalAuthFilter internalAuthFilter;
 
     @Value("${app.cors.allowed-origins:http://localhost:5173,http://localhost:3000,http://localhost:4200}")
     private List<String> allowedOrigins;
@@ -47,6 +48,10 @@ public class SecurityConfig {
                                         // shareable and embeddable (the v0.1 hero deliverable).
                                         .requestMatchers("/preview/**")
                                         .permitAll()
+                                        // Renderer service-to-service callbacks: authenticated by the
+                                        // shared internal token (ROLE_INTERNAL), not the user JWT.
+                                        .requestMatchers("/api/internal/**")
+                                        .hasRole("INTERNAL")
                                         .requestMatchers("/api/admin/**")
                                         .hasRole("ADMIN")
                                         .anyRequest()
@@ -56,6 +61,7 @@ public class SecurityConfig {
                         ex ->
                                 ex.authenticationEntryPoint(authenticationEntryPoint())
                                         .accessDeniedHandler(accessDeniedHandler()))
+                .addFilterBefore(internalAuthFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

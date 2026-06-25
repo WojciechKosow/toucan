@@ -38,4 +38,22 @@ public class LocalPublishingService implements PublishingService {
             throw new RuntimeException("Failed to publish animation " + animationId, e);
         }
     }
+
+    @Override
+    public RenderArtifacts publishRender(UUID animationId, byte[] mp4, byte[] poster) {
+        try {
+            Path dir = publishDir.resolve(animationId.toString());
+            Files.createDirectories(dir);
+            Files.write(dir.resolve("render.mp4"), mp4);
+            String mp4Url = baseUrl + "/preview/" + animationId + "/render.mp4";
+            String posterUrl = null;
+            if (poster != null && poster.length > 0) {
+                Files.write(dir.resolve("poster.png"), poster);
+                posterUrl = baseUrl + "/preview/" + animationId + "/poster.png";
+            }
+            return new RenderArtifacts(mp4Url, posterUrl);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to publish render for animation " + animationId, e);
+        }
+    }
 }

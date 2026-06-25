@@ -21,15 +21,11 @@ public class Animation {
     @Column(nullable = false)
     private UUID userId;
 
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private AnimationType type;
-
     /** The user's natural-language description that drives generation. */
     @Column(columnDefinition = "text", nullable = false)
     private String prompt;
 
-    /** The generated, self-contained animation (a single HTML document). */
+    /** The generated, self-contained animation (a single HTML document) — legacy preview path. */
     @Column(columnDefinition = "text")
     private String generatedCode;
 
@@ -42,6 +38,15 @@ public class Animation {
 
     /** Public URL of the hosted, running preview. */
     private String previewUrl;
+
+    /** Public URL of the rendered MP4 (the v0.1 deliverable). Populated when {@code READY}. */
+    private String mp4Url;
+
+    /** Public URL of the poster frame for the MP4. */
+    private String posterUrl;
+
+    /** Rendered video duration in milliseconds. */
+    private Long durationMs;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
