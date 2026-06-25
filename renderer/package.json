@@ -11,11 +11,13 @@
     "studio": "remotion studio src/index.ts",
     "serve": "node src/render-service.mjs",
     "render": "remotion render src/index.ts MovingBox out/throwaway.mp4",
+    "render:scene": "remotion render src/index.ts Scene out/scene.mp4",
     "test": "node --test --import tsx \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@dagrejs/dagre": "1.1.4",
     "@remotion/cli": "4.0.482",
+    "@remotion/google-fonts": "4.0.482",
     "@toucan/spec": "*",
     "react": "18.3.1",
     "react-dom": "18.3.1",
