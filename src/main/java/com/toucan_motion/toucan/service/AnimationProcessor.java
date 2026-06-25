@@ -5,9 +5,9 @@ import com.toucan_motion.toucan.entity.Animation;
 import com.toucan_motion.toucan.entity.AnimationStatus;
 import com.toucan_motion.toucan.entity.RenderJob;
 import com.toucan_motion.toucan.entity.RenderJobStatus;
+import com.toucan_motion.toucan.generation.scene.SceneDirector;
 import com.toucan_motion.toucan.generation.scene.SceneSpec;
 import com.toucan_motion.toucan.generation.scene.SceneSpecValidator;
-import com.toucan_motion.toucan.render.PlaceholderSpecGenerator;
 import com.toucan_motion.toucan.render.RenderDispatch;
 import com.toucan_motion.toucan.render.RendererClient;
 import com.toucan_motion.toucan.repository.AnimationRepository;
@@ -35,7 +35,7 @@ public class AnimationProcessor {
 
     private final AnimationRepository animationRepository;
     private final RenderJobRepository renderJobRepository;
-    private final PlaceholderSpecGenerator specGenerator;
+    private final SceneDirector sceneDirector;
     private final SceneSpecValidator validator;
     private final RendererClient rendererClient;
 
@@ -56,8 +56,8 @@ public class AnimationProcessor {
 
         RenderJob job = null;
         try {
-            // ── spec step (outside any transaction) ──
-            SceneSpec spec = specGenerator.generate(animation.getPrompt());
+            // ── spec step (outside any transaction): AI director, or the keyless stub fixture ──
+            SceneSpec spec = sceneDirector.direct(animation.getPrompt());
             validator.validate(spec);
             String specJson = objectMapper.writeValueAsString(spec);
 

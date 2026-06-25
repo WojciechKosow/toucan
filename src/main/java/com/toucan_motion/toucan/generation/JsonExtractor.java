@@ -5,7 +5,7 @@ package com.toucan_motion.toucan.generation;
  * sentence of preamble even when told not to; this isolates the outermost {@code { ... }} so the spec
  * parser sees clean JSON.
  */
-final class JsonExtractor {
+public final class JsonExtractor {
 
     private JsonExtractor() {}
 
@@ -13,7 +13,7 @@ final class JsonExtractor {
      * @return the substring from the first {@code {} to its matching {@code }} (brace-aware, so braces
      *     inside strings don't fool it), or the trimmed input if no object is found.
      */
-    static String extract(String raw) {
+    public static String extract(String raw) {
         if (raw == null) {
             return "";
         }
