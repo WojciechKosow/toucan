@@ -2,7 +2,7 @@
 
 > Read this top to bottom, then skim the four sources of truth it points to. It
 > reflects the **actual** state of the repo as of the last commit on branch
-> `claude/busy-fermat-fxt5wa` (`1f44112`, Section 3). The planned build order
+> `claude/friendly-knuth-434bju` (`1f44112`, Section 3). The planned build order
 > slipped — this document states what is *really* built, not the plan's order.
 
 ---
@@ -47,7 +47,7 @@ Also useful: `docs/bakeoff.md` (provider bake-off record), `docs/API.md`.
 - **No work on the legacy vanilla-JS path** (`FlowSpec` / `flow.js` / `code.js`
   and the per-type generators). It stays until the Remotion path renders fixtures
   clean, then it's retired. Don't touch it, don't extend it.
-- **Branch:** all work continues on `claude/busy-fermat-fxt5wa`. Commit + push
+- **Branch:** all work continues on `claude/friendly-knuth-434bju`. Commit + push
   there. Don't open a PR unless asked.
 
 ---
@@ -77,7 +77,7 @@ which is why the renderer wiring is still a placeholder (see debt #1).
 ## 4. Exactly where we are right now
 
 - **Last completed:** Section 3 — the deterministic Remotion kit. Committed and
-  pushed (`1f44112`) on `claude/busy-fermat-fxt5wa`. In-sandbox gates green:
+  pushed (`1f44112`) on `claude/friendly-knuth-434bju`. In-sandbox gates green:
   `tsc`, prettier, node tests (6), and `remotion bundle` (the whole composition
   graph compiles through webpack). Frame N is a pure function of N by
   construction (no `Date.now`, no random).
