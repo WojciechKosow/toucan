@@ -142,6 +142,19 @@ class RenderLifecycleTest {
     }
 
     @Test
+    void callbackWithTokenButUnknownJobReturns404() throws Exception {
+        // Auth passes (token present), so the controller runs and its 404 surfaces as a real 404 —
+        // not masked to 401 by the /error forward.
+        mvc.perform(
+                        multipart("/api/internal/render-callback")
+                                .param("jobId", UUID.randomUUID().toString())
+                                .param("status", "FAILED")
+                                .param("error", "no such job")
+                                .header("X-Internal-Token", TOKEN))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     void callbackWithoutInternalTokenIsRejected() throws Exception {
         UUID animationId = newPendingAnimation();
         UUID jobId = newQueuedJob(animationId);

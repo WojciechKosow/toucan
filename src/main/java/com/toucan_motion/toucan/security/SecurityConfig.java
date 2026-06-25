@@ -44,6 +44,11 @@ public class SecurityConfig {
                         auth ->
                                 auth.requestMatchers("/api/auth/**")
                                         .permitAll()
+                                        // Let the error dispatch through so controller-thrown statuses
+                                        // (400/404/500) surface as themselves instead of being masked
+                                        // as 401 when the /error forward hits an authenticated rule.
+                                        .requestMatchers("/error")
+                                        .permitAll()
                                         // Hosted animation previews are public so the links are
                                         // shareable and embeddable (the v0.1 hero deliverable).
                                         .requestMatchers("/preview/**")
