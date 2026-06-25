@@ -11,10 +11,12 @@
     "studio": "remotion studio src/index.ts",
     "serve": "node src/render-service.mjs",
     "render": "remotion render src/index.ts MovingBox out/throwaway.mp4",
-    "test": "echo \"(no renderer tests yet — added in Section 2)\" && exit 0"
+    "test": "node --test --import tsx \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@dagrejs/dagre": "1.1.4",
     "@remotion/cli": "4.0.482",
+    "@toucan/spec": "*",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "remotion": "4.0.482"
@@ -24,6 +26,7 @@
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
     "prettier": "^3.3.0",
+    "tsx": "4.19.2",
     "typescript": "^5.5.0"
   }
 }
