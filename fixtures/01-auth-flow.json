@@ -9,14 +9,13 @@
   "elements": [
     { "id": "client", "kind": "browser", "props": { "label": "Browser" } },
     { "id": "api", "kind": "node", "props": { "label": "Auth API", "icon": "server" } },
-    { "id": "db", "kind": "node", "props": { "label": "User DB", "icon": "database" } },
-    { "id": "token", "kind": "label", "props": { "text": "JWT" } }
+    { "id": "db", "kind": "node", "props": { "label": "User DB", "icon": "database" } }
   ],
   "edges": [
     { "id": "e1", "from": "client", "to": "api", "kind": "request", "label": "POST /login" },
     { "id": "e2", "from": "api", "to": "db", "kind": "query", "label": "verify user" },
     { "id": "e3", "from": "db", "to": "api", "kind": "response", "label": "user record" },
-    { "id": "e4", "from": "api", "to": "client", "kind": "response", "label": "200 OK + JWT" }
+    { "id": "e4", "from": "api", "to": "client", "kind": "response", "label": "200 OK" }
   ],
   "timeline": [
     { "verb": "camera.focus", "target": "client" },
@@ -26,8 +25,7 @@
     { "verb": "node.state", "target": "db", "args": { "state": "active" } },
     { "verb": "packet.travel", "target": "e3" },
     { "verb": "node.state", "target": "api", "args": { "state": "active" } },
-    { "verb": "label.show", "target": "token" },
-    { "verb": "packet.travel", "target": "e4" },
+    { "verb": "packet.travel", "target": "e4", "args": { "label": "JWT" } },
     { "verb": "camera.focus", "target": "client" }
   ]
 }
