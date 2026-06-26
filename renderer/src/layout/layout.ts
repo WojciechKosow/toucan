@@ -6,6 +6,13 @@
 // 8 px grid, and flag density / overflow. Minimum gaps are enforced through
 // dagre's rank/node separation (§7's 120 px horizontal / 80 px vertical).
 //
+// Edge routing is computed here too (not taken from dagre's polylines, which bend
+// through awkward midpoints and stack anti-parallel pairs on top of each other).
+// Each edge is a clean straight connector clamped to the source/target node
+// borders; a request/response pair (A→B + B→A) is split into two parallel lanes
+// (§7 clearance). For ranking we collapse such pairs to a single undirected edge
+// so dagre lays out a clean left-to-right flow instead of a cycle-broken tangle.
+//
 // Determinism is mandatory: same SceneSpec → byte-identical positions. We sort
 // every input by id before insertion, and use no randomness and no wall-clock.
 
@@ -14,6 +21,7 @@ import type { Element, LayoutDirection, SceneSpec } from "@toucan/spec";
 import {
   DEFAULT_NODE_SIZE,
   DENSITY_CAP,
+  EDGE_LANE_OFFSET,
   GRID,
   LIVE_AREA,
   MIN_GAP,
@@ -52,6 +60,67 @@ function members(el: Element): string[] {
   return Array.isArray(props?.members) ? props.members : [];
 }
 
+/**
+ * March from an interior point along (dx,dy) to the box's rectangle border, so an
+ * edge endpoint lands cleanly on the node edge (debt #3) — no gap, no overshoot.
+ */
+function rayBoxExit(
+  box: NodeBox,
+  px: number,
+  py: number,
+  dx: number,
+  dy: number,
+): Point {
+  const hw = box.width / 2;
+  const hh = box.height / 2;
+  let t = Infinity;
+  if (dx > 0) t = Math.min(t, (box.x + hw - px) / dx);
+  else if (dx < 0) t = Math.min(t, (box.x - hw - px) / dx);
+  if (dy > 0) t = Math.min(t, (box.y + hh - py) / dy);
+  else if (dy < 0) t = Math.min(t, (box.y - hh - py) / dy);
+  if (!Number.isFinite(t)) t = 0;
+  return { x: px + t * dx, y: py + t * dy };
+}
+
+/**
+ * A clean straight route from the source border to the target border. If a
+ * reverse edge exists between the same pair, both are pushed onto opposite
+ * parallel lanes (perpendicular to a *canonical* direction, so the pair always
+ * splits to opposite sides) — no overlapping/doubled connectors (§7).
+ */
+function routeEdge(
+  from: string,
+  to: string,
+  nodes: Record<string, NodeBox>,
+  hasReverse: boolean,
+): Point[] {
+  const s = nodes[from];
+  const t = nodes[to];
+  const len = Math.hypot(t.x - s.x, t.y - s.y) || 1;
+  const ux = (t.x - s.x) / len;
+  const uy = (t.y - s.y) / len;
+
+  let ox = 0;
+  let oy = 0;
+  if (hasReverse) {
+    // Canonical direction (lexically smaller id → larger) gives a stable
+    // perpendicular; the two anti-parallel edges then take opposite signs.
+    const a = from < to ? from : to;
+    const b = from < to ? to : from;
+    const cl =
+      Math.hypot(nodes[b].x - nodes[a].x, nodes[b].y - nodes[a].y) || 1;
+    const px = -(nodes[b].y - nodes[a].y) / cl;
+    const py = (nodes[b].x - nodes[a].x) / cl;
+    const sign = from === a ? 1 : -1;
+    ox = px * EDGE_LANE_OFFSET * sign;
+    oy = py * EDGE_LANE_OFFSET * sign;
+  }
+
+  const start = rayBoxExit(s, s.x + ox, s.y + oy, ux, uy);
+  const end = rayBoxExit(t, t.x + ox, t.y + oy, -ux, -uy);
+  return [start, end];
+}
+
 export function layoutScene(spec: SceneSpec): LayoutResult {
   const direction = (spec.meta?.direction ?? "LR") as LayoutDirection;
   const { ranksep, nodesep } = separations(direction);
@@ -75,8 +144,17 @@ export function layoutScene(spec: SceneSpec): LayoutResult {
       if (g.hasNode(m)) g.setParent(m, el.id);
     }
   }
+  // For *ranking*, collapse anti-parallel (and duplicate) pairs to one undirected
+  // edge: a 2-cycle like client→api + api→client would otherwise force dagre to
+  // break the cycle and produce a cramped, off-axis layout instead of a clean
+  // left-to-right flow. All edges are still routed/rendered individually below.
+  const rankSeen = new Set<string>();
   for (const e of edges) {
-    if (g.hasNode(e.from) && g.hasNode(e.to)) g.setEdge(e.from, e.to);
+    if (!(g.hasNode(e.from) && g.hasNode(e.to))) continue;
+    const key = e.from < e.to ? `${e.from}|${e.to}` : `${e.to}|${e.from}`;
+    if (rankSeen.has(key)) continue;
+    rankSeen.add(key);
+    g.setEdge(e.from, e.to);
   }
 
   dagre.layout(g);
@@ -118,14 +196,13 @@ export function layoutScene(spec: SceneSpec): LayoutResult {
     nodes[b.id] = { ...b, x: snap(b.x + dx), y: snap(b.y + dy) };
   }
 
+  // ── edge routing: clean border-to-border connectors (anti-parallel → lanes) ──
+  const directed = new Set(edges.map((e) => `${e.from}>${e.to}`));
   const edgesOut: Record<string, EdgeRoute> = {};
   for (const e of edges) {
-    if (!(g.hasNode(e.from) && g.hasNode(e.to))) continue;
-    const ge = g.edge(e.from, e.to);
-    const points: Point[] = (ge?.points ?? []).map((p) => ({
-      x: p.x + dx,
-      y: p.y + dy,
-    }));
+    if (!(nodes[e.from] && nodes[e.to])) continue;
+    const hasReverse = directed.has(`${e.to}>${e.from}`);
+    const points = routeEdge(e.from, e.to, nodes, hasReverse);
     edgesOut[e.id] = { id: e.id, from: e.from, to: e.to, points };
   }
 
