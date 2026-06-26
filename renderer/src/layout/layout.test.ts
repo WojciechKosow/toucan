@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import type { SceneSpec } from "@toucan/spec";
 import { GRID, SAFE_MARGIN, STAGE } from "./constants.js";
 import { layoutScene } from "./layout.js";
-import type { NodeBox } from "./types.js";
+import type { NodeBox, Point } from "./types.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const heroSpec: SceneSpec = JSON.parse(
@@ -135,9 +135,86 @@ test("a pathological wide chain (won't fit a single row) raises the overflow fla
 
 test("node centers are snapped to the 8px grid and graph is centered", () => {
   const { nodes } = layoutScene(heroSpec);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
   for (const b of Object.values(nodes)) {
     assert.equal(b.x % GRID, 0);
     assert.equal(b.y % GRID, 0);
+    minX = Math.min(minX, b.x - b.width / 2);
+    minY = Math.min(minY, b.y - b.height / 2);
+    maxX = Math.max(maxX, b.x + b.width / 2);
+    maxY = Math.max(maxY, b.y + b.height / 2);
+  }
+  // §7: the whole graph's bounding box is centered in the live area. Allow one
+  // grid step of slack since centers are independently snapped to the 8px grid.
+  assert.ok(
+    Math.abs((minX + maxX) / 2 - STAGE.width / 2) <= GRID,
+    `graph not horizontally centered: bbox cx=${(minX + maxX) / 2}`,
+  );
+  assert.ok(
+    Math.abs((minY + maxY) / 2 - STAGE.height / 2) <= GRID,
+    `graph not vertically centered: bbox cy=${(minY + maxY) / 2}`,
+  );
+});
+
+/** A point sits on a box border if it's on one of the four edges (within eps). */
+function onBorder(p: { x: number; y: number }, b: NodeBox, eps = 0.5): boolean {
+  const l = b.x - b.width / 2;
+  const r = b.x + b.width / 2;
+  const t = b.y - b.height / 2;
+  const bot = b.y + b.height / 2;
+  const onV =
+    (Math.abs(p.x - l) <= eps || Math.abs(p.x - r) <= eps) &&
+    p.y >= t - eps &&
+    p.y <= bot + eps;
+  const onH =
+    (Math.abs(p.y - t) <= eps || Math.abs(p.y - bot) <= eps) &&
+    p.x >= l - eps &&
+    p.x <= r + eps;
+  return onV || onH;
+}
+
+function segmentsOverlap(a: Point[], b: Point[]): boolean {
+  // Cheap coincidence check for the lane-separation guarantee: do the two
+  // 2-point routes share both endpoints (i.e. land on the same line)?
+  const same = (p: Point, q: Point) =>
+    Math.abs(p.x - q.x) < 1 && Math.abs(p.y - q.y) < 1;
+  return (
+    (same(a[0], b[0]) && same(a[1], b[1])) ||
+    (same(a[0], b[1]) && same(a[1], b[0]))
+  );
+}
+
+test("edge endpoints land on the source/target node borders (debt #3)", () => {
+  const { nodes, edges } = layoutScene(heroSpec);
+  for (const e of Object.values(edges)) {
+    const start = e.points[0];
+    const end = e.points[e.points.length - 1];
+    assert.ok(
+      onBorder(start, nodes[e.from]),
+      `${e.id} start not on ${e.from} border: ${JSON.stringify(start)}`,
+    );
+    assert.ok(
+      onBorder(end, nodes[e.to]),
+      `${e.id} end not on ${e.to} border: ${JSON.stringify(end)}`,
+    );
+  }
+});
+
+test("anti-parallel edges route on separate lanes (no doubled connectors)", () => {
+  // The hero fixture has two request/response pairs: e1/e4 (client↔api) and
+  // e2/e3 (api↔db). Each pair must occupy distinct, non-coincident lanes.
+  const { edges } = layoutScene(heroSpec);
+  for (const [x, y] of [
+    ["e1", "e4"],
+    ["e2", "e3"],
+  ]) {
+    assert.ok(
+      !segmentsOverlap(edges[x].points, edges[y].points),
+      `${x} and ${y} share a line — anti-parallel lanes not separated`,
+    );
   }
 });
 
