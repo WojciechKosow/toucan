@@ -1,0 +1,26 @@
+{
+  "name": "toucan-motion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "v0.1 throwaway CLI: topic -> LLM-generated HTML -> headless Chromium frame capture -> ffmpeg -> MP4.",
+  "type": "module",
+  "bin": {
+    "toucan-motion": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "dotenv": "^16.4.5",
+    "ffmpeg-static": "^5.2.0",
+    "playwright": "^1.55.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.0"
+  }
+}

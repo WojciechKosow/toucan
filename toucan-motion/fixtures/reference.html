@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Toucan — reference</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Static styling ONLY. No transitions / @keyframes — every animated value
+         is computed in render(ms) so seeking is frame-perfect. */
+      html,
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #0b0f17;
+      }
+      #stage {
+        position: fixed;
+        inset: 0;
+        background: #0b0f17;
+        overflow: hidden;
+      }
+      /* 1920x1080 design surface; fit() scales it into the viewport (letterbox). */
+      #frame {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 1920px;
+        height: 1080px;
+        transform-origin: 0 0;
+        font-family:
+          Inter,
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+        color: #e6eaf2;
+      }
+      /* The virtual camera. Moving the camera = transforming #world; nothing else moves. */
+      #world {
+        position: absolute;
+        inset: 0;
+        transform-origin: 0 0;
+        will-change: transform, filter;
+      }
+      #grid {
+        position: absolute;
+        inset: 0;
+        background-image:
+          radial-gradient(rgba(124, 133, 151, 0.18) 1.5px, transparent 1.5px);
+        background-size: 48px 48px;
+        opacity: 0.5;
+      }
+      /* Constant branded frame (lives outside #world, so the camera never moves it). */
+      #eyebrow {
+        position: absolute;
+        top: 64px;
+        left: 72px;
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        color: #ffb25c;
+      }
+      #headline {
+        position: absolute;
+        top: 96px;
+        left: 72px;
+        font-size: 44px;
+        font-weight: 700;
+        color: #e6eaf2;
+      }
+      .box {
+        position: absolute;
+        left: 1180px; /* matches BOX.x in render() */
+        top: 360px; /* matches BOX.y in render() */
+        width: 420px;
+        height: 240px;
+        border-radius: 24px;
+        background: linear-gradient(180deg, #1e2a3c, #16202f);
+        border: 2px solid #33415c;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+        transform-origin: center center;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 34px;
+        font-weight: 600;
+        color: #e6eaf2;
+      }
+      #ring {
+        position: absolute;
+        width: 60px;
+        height: 60px;
+        margin: -30px 0 0 -30px;
+        border-radius: 50%;
+        border: 3px solid #ffb25c;
+        pointer-events: none;
+      }
+      #cursor {
+        position: absolute;
+        width: 28px;
+        height: 28px;
+        margin: -2px 0 0 -2px;
+        pointer-events: none;
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6));
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="frame">
+        <div id="world">
+          <div id="grid"></div>
+          <div id="box" class="box">Click me</div>
+          <div id="ring"></div>
+          <svg
+            id="cursor"
+            viewBox="0 0 28 28"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M3 2 L3 22 L9 16 L13 24 L17 22 L13 14 L21 14 Z"
+              fill="#ffffff"
+              stroke="#0b0f17"
+              stroke-width="1.5"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
+        <div id="eyebrow">REFERENCE</div>
+        <div id="headline">Pipeline test rig</div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        "use strict";
+
+        var DUR = 5000;
+        var FPS = 30;
+
+        // World-space geometry (1920x1080 design space).
+        var BOX = { x: 1180, y: 360, w: 420, h: 240 };
+        var BOX_CX = BOX.x + BOX.w / 2;
+        var BOX_CY = BOX.y + BOX.h / 2;
+        var CURSOR_START = { x: 1720, y: 980 };
+
+        var frame = document.getElementById("frame");
+        var world = document.getElementById("world");
+        var box = document.getElementById("box");
+        var ring = document.getElementById("ring");
+        var cursor = document.getElementById("cursor");
+
+        // ── pure helpers (no wall clock) ──
+        function clamp(v, a, b) {
+          return v < a ? a : v > b ? b : v;
+        }
+        function lerp(a, b, t) {
+          return a + (b - a) * t;
+        }
+        // local progress 0..1 within [a,b]
+        function seg(ms, a, b) {
+          return clamp((ms - a) / (b - a), 0, 1);
+        }
+        function easeOutCubic(t) {
+          return 1 - Math.pow(1 - t, 3);
+        }
+        function easeInOutCubic(t) {
+          return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        }
+        function easeOutExpo(t) {
+          return t >= 1 ? 1 : 1 - Math.pow(2, -10 * t);
+        }
+
+        // Camera: world point (x,y) maps to screen (x*s+tx, y*s+ty). To frame a
+        // world point at a screen target, tx = screenX - x*s.
+        function applyCamera(scale, tx, ty, blur) {
+          world.style.transform =
+            "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
+          world.style.filter = blur > 0.01 ? "blur(" + blur + "px)" : "none";
+        }
+
+        // ── the one render function: complete, correct frame for ANY ms ──
+        function render(ms) {
+          ms = clamp(ms, 0, DUR);
+
+          // 1) Box entrance: rise + fade (0.2s–1.2s)
+          var inT = easeOutCubic(seg(ms, 200, 1200));
+          var rise = lerp(40, 0, inT);
+
+          // 4) Click reaction: a brief scale bump on the box around the click.
+          var bumpT = seg(ms, 3500, 3900);
+          var bump = Math.sin(bumpT * Math.PI) * 0.05; // 0 -> .05 -> 0
+          box.style.opacity = inT;
+          box.style.transform =
+            "translateY(" + rise + "px) scale(" + (1 + bump) + ")";
+          box.style.borderColor = bumpT > 0 && bumpT < 1 ? "#ffb25c" : "#33415c";
+
+          // 2) Camera push-in onto the box (1.3s–2.5s), with motion blur that
+          //    peaks mid-move and returns to 0 — the "zoom-through" feel.
+          var pushRaw = seg(ms, 1300, 2500);
+          var push = easeOutExpo(pushRaw);
+          var scale = lerp(1, 1.8, push);
+          var framedTx = 960 - BOX_CX * 1.8;
+          var framedTy = 540 - BOX_CY * 1.8;
+          var tx = lerp(0, framedTx, push);
+          var ty = lerp(0, framedTy, push);
+          var blur = Math.sin(pushRaw * Math.PI) * 6;
+          applyCamera(scale, tx, ty, blur);
+
+          // 3) Cursor travels to the box center (2.5s–3.6s), eased.
+          var moveT = easeInOutCubic(seg(ms, 2500, 3600));
+          var curX = lerp(CURSOR_START.x, BOX_CX, moveT);
+          var curY = lerp(CURSOR_START.y, BOX_CY, moveT);
+          cursor.style.transform = "translate(" + curX + "px," + curY + "px)";
+
+          // 4) Click pulse ring at the box center (3.5s–4.1s): grow + fade.
+          var ringT = seg(ms, 3500, 4100);
+          var ringScale = lerp(0.2, 2.2, ringT);
+          var ringOpacity = ringT > 0 && ringT < 1 ? 1 - ringT : 0;
+          ring.style.transform =
+            "translate(" +
+            BOX_CX +
+            "px," +
+            BOX_CY +
+            "px) scale(" +
+            ringScale +
+            ")";
+          ring.style.opacity = ringOpacity;
+
+          if (ms >= DUR) window.__TOUCAN_DONE__ = true;
+        }
+
+        // Fit the 1920x1080 surface into the viewport (layout only — NOT animated,
+        // so it never affects deterministic capture where the viewport is fixed).
+        function fit() {
+          var s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+          var ox = (window.innerWidth - 1920 * s) / 2;
+          var oy = (window.innerHeight - 1080 * s) / 2;
+          frame.style.transform =
+            "translate(" + ox + "px," + oy + "px) scale(" + s + ")";
+        }
+        window.addEventListener("resize", fit);
+        fit();
+
+        // The recorder drives this; seek() must paint any frame, in any order.
+        window.__TOUCAN__ = {
+          ready: false,
+          durationMs: DUR,
+          fps: FPS,
+          seek: function (ms) {
+            render(ms);
+          },
+          version: "0.1",
+        };
+        window.__TOUCAN_DONE__ = false;
+
+        // Gate readiness on fonts (so text isn't captured mid-FOUT), but never let
+        // fonts block the clock more than 500ms.
+        function start() {
+          render(0); // paint first frame
+          window.__TOUCAN__.ready = true;
+
+          // Autoplay for human preview ONLY — capture never uses this path.
+          var startMs = null;
+          function loop(now) {
+            if (startMs === null) startMs = now;
+            render(now - startMs);
+            if (now - startMs < DUR) requestAnimationFrame(loop);
+          }
+          requestAnimationFrame(loop);
+        }
+
+        var fontsReady =
+          document.fonts && document.fonts.ready
+            ? document.fonts.ready
+            : Promise.resolve();
+        var timeout = new Promise(function (r) {
+          setTimeout(r, 500);
+        });
+        Promise.race([fontsReady, timeout]).then(start);
+      })();
+    </script>
+  </body>
+</html>
