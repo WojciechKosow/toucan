@@ -141,6 +141,12 @@ capture fails. The whole video depends on the script running cleanly. So:
 - **Make `render(ms)` total and pure.** It must not throw for any `ms` in
   `[0, durationMs]`, must not depend on previous calls, and must not use
   `Date.now()` / `Math.random()` / the wall clock.
+- **Guard every lookup `render` depends on.** Helpers like `getNodeRect(id)`,
+  `getBoundingClientRect`, camera-target lookups, `document.getElementById`, and
+  array indexing must never feed `undefined` into `.x`/`.style`/etc. Resolve all
+  ids to real elements; if a target could be missing, return a safe default
+  (e.g. screen center) instead of crashing. A single bad frame fails the whole
+  render — so the camera target for EVERY `ms` must resolve to a real rect.
 - **No CSS `transition:` or `@keyframes` on anything that animates.** Compute
   every animated value in `render(ms)`. CSS is for static styling only.
 
