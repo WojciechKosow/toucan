@@ -81,11 +81,38 @@ The frame is branded (fixed):
 
 Scene content is free: the thing being explained uses its own believable colors (a fake shop's blue CTA stays blue). Brand the wrapper, not the world inside it. Don't recolor a realistic UI into amber — that breaks the realism that makes it land.
 
-## 6. SELF-CHECK BEFORE YOU OUTPUT
+## 6. JS THAT MUST NOT BREAK CAPTURE (hard — read carefully)
+
+The recorder loads your file and waits for `window.__TOUCAN__.ready === true`. If
+your script throws **any** error before that, `__TOUCAN__` is never created and
+capture fails. The whole video depends on the script running cleanly. So:
+
+- **Never reassign a `const`.** Use `let` for ANY variable you reassign — loop
+  accumulators, running values, anything mutated inside `render(ms)` or a loop.
+  Reassigning a `const` throws `Assignment to constant variable` and kills the
+  entire script. When unsure, use `let`.
+- **The script must run start-to-finish with zero uncaught errors.** Don't read
+  `.style`/properties off elements that don't exist; declare every variable
+  before use; no stray `await` at top level; valid JS only.
+- **Define `window.__TOUCAN__` early and always reach `ready`.** Create the
+  `__TOUCAN__` object, then set `ready = true` after `Promise.race([document.fonts.ready, 500ms timeout])`
+  resolves and the first `render(0)` has run. The 500ms fallback is mandatory —
+  if fonts stall, you must still become ready.
+- **Make `render(ms)` total and pure.** It must not throw for any `ms` in
+  `[0, durationMs]`, must not depend on previous calls, and must not use
+  `Date.now()` / `Math.random()` / the wall clock.
+- **No CSS `transition:` or `@keyframes` on anything that animates.** Compute
+  every animated value in `render(ms)`. CSS is for static styling only.
+
+If in doubt, prefer the simplest code that cannot throw over clever code that
+might. A plain video that captures beats a fancy one that errors.
+
+## 7. SELF-CHECK BEFORE YOU OUTPUT
 
 - [ ] One file, inlined, autoplays, no host chrome, 16:9 1920×1080 stage.
 - [ ] All motion is `render(ms)`; no CSS transitions/@keyframes in captured content; `seek(ms)` renders any frame correctly, out of order.
-- [ ] `window.__TOUCAN__.ready / .durationMs / .fps / .seek` and `__TOUCAN_DONE__` wired.
+- [ ] No `const` is ever reassigned (use `let`); the script throws no uncaught errors; `window.__TOUCAN__` exists after load.
+- [ ] `window.__TOUCAN__.ready / .durationMs / .fps / .seek` and `__TOUCAN_DONE__` wired; `ready` flips true even if fonts stall (500ms fallback).
 - [ ] Opens on the Overview node graph; dives into each node; returns/advances.
 - [ ] Single `#world` transform = camera. Every action is framed by a push-in first.
 - [ ] Transitions are zoom-through + motion blur, not fades.
