@@ -173,13 +173,20 @@ export async function capture(
     for (let i = 0; i < frameCount; i++) {
       const t = (i * 1000) / fps;
       // await the seek before the screenshot, or we'd capture the prior frame.
-      await page.evaluate(
-        (ms) =>
-          (
-            window as unknown as { __TOUCAN__: { seek: (ms: number) => void } }
-          ).__TOUCAN__.seek(ms),
-        t,
-      );
+      try {
+        await page.evaluate(
+          (ms) =>
+            (
+              window as unknown as { __TOUCAN__: { seek: (ms: number) => void } }
+            ).__TOUCAN__.seek(ms),
+          t,
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new Error(
+          `render(ms) threw while seeking ms=${Math.round(t)} (frame ${i}/${frameCount}): ${msg}\n  render() must be total — it must not throw for any ms in [0, durationMs]. Guard every lookup it depends on. This is a contract bug in the HTML.`,
+        );
+      }
       await page.screenshot({
         path: join(framesDir, `frame-${String(i).padStart(5, "0")}.png`),
       });

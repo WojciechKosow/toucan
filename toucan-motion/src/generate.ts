@@ -1,15 +1,21 @@
 // Step 6 — generation: a topic (+ optional script) -> one self-contained HTML
-// string, via the OpenAI API with prompts/system.md as the system prompt.
-// No auto-repair loop in v0.1: if the output doesn't honor the contract we fail
-// loudly and hand back the raw text for inspection.
+// string, via OpenAI or Anthropic (--provider), with prompts/system.md as the
+// system prompt. Also exposes repair(): a one-shot fix that feeds a broken file
+// + its capture error back to the model and asks for a corrected file.
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
-export const DEFAULT_MODEL = "gpt-4.1";
-// Safe across gpt-4.1 (32k cap) and gpt-4o (16k cap); raise if your model allows
-// and a richer HTML gets truncated.
+export type Provider = "openai" | "anthropic";
+export const PROVIDERS: Provider[] = ["openai", "anthropic"];
+export const DEFAULT_MODELS: Record<Provider, string> = {
+  openai: "gpt-4.1",
+  anthropic: "claude-opus-4-8",
+};
+// Safe across gpt-4.1 / gpt-4o / claude; raise if your model allows and a richer
+// HTML gets truncated.
 const MAX_OUTPUT_TOKENS = 16000;
 const SYSTEM_PROMPT_PATH = fileURLToPath(
   new URL("../prompts/system.md", import.meta.url),
@@ -18,8 +24,17 @@ const SYSTEM_PROMPT_PATH = fileURLToPath(
 export interface GenerateOptions {
   topic: string;
   script?: string;
+  provider?: Provider;
   model?: string;
   /** Override the system prompt file (defaults to prompts/system.md). */
+  promptPath?: string;
+}
+
+export interface RepairOptions {
+  brokenHtml: string;
+  error: string;
+  provider?: Provider;
+  model?: string;
   promptPath?: string;
 }
 
@@ -35,6 +50,15 @@ export class GenerationError extends Error {
   }
 }
 
+/** Resolve the provider: explicit > TOUCAN_PROVIDER env > whichever key is set > openai. */
+export function resolveProvider(explicit?: string): Provider {
+  const v = (explicit ?? process.env.TOUCAN_PROVIDER ?? "").toLowerCase();
+  if (v === "openai" || v === "anthropic") return v;
+  if (process.env.OPENAI_API_KEY) return "openai";
+  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
+  return "openai";
+}
+
 /** Strip a single ```html ... ``` (or bare ```) fence if the model added one. */
 function stripFences(text: string): string {
   const t = text.trim();
@@ -46,39 +70,88 @@ function stripFences(text: string): string {
     .trim();
 }
 
-export async function generate(opts: GenerateOptions): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      "OPENAI_API_KEY is not set. Put it in .env (see .env.example), or use --html to capture an existing file without generating.",
-    );
+async function callModel(
+  provider: Provider,
+  model: string,
+  system: string,
+  userText: string,
+): Promise<string> {
+  if (provider === "openai") {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        "OPENAI_API_KEY is not set. Put it in .env, use --provider anthropic, or use --html (no key needed).",
+      );
+    }
+    const client = new OpenAI({ apiKey });
+    const completion = await client.chat.completions.create({
+      model,
+      max_completion_tokens: MAX_OUTPUT_TOKENS,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: userText },
+      ],
+    });
+    return completion.choices[0]?.message?.content ?? "";
   }
 
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "ANTHROPIC_API_KEY is not set. Put it in .env, use --provider openai, or use --html (no key needed).",
+    );
+  }
+  const client = new Anthropic({ apiKey });
+  const message = await client.messages.create({
+    model,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    system,
+    messages: [{ role: "user", content: userText }],
+  });
+  return message.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+}
+
+function checkContract(raw: string, what: string): string {
+  const html = stripFences(raw);
+  if (!html.includes("__TOUCAN__") || !html.includes("seek")) {
+    throw new GenerationError(
+      `${what} is missing the __TOUCAN__ / seek contract.`,
+      raw,
+    );
+  }
+  return html;
+}
+
+export async function generate(opts: GenerateOptions): Promise<string> {
+  const provider = resolveProvider(opts.provider);
+  const model = opts.model ?? DEFAULT_MODELS[provider];
   const system = await readFile(opts.promptPath ?? SYSTEM_PROMPT_PATH, "utf8");
   const userText = opts.script
     ? `Topic: ${opts.topic}\n\nBeat-by-beat script (follow these beats):\n${opts.script}`
     : `Topic: ${opts.topic}`;
+  const raw = await callModel(provider, model, system, userText);
+  return checkContract(raw, "Generated output");
+}
 
-  const client = new OpenAI({ apiKey });
-  const completion = await client.chat.completions.create({
-    model: opts.model ?? DEFAULT_MODEL,
-    max_completion_tokens: MAX_OUTPUT_TOKENS,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: userText },
-    ],
-  });
-
-  const raw = completion.choices[0]?.message?.content ?? "";
-  const html = stripFences(raw);
-
-  // Basic sanity check only (no repair loop in v0.1).
-  if (!html.includes("__TOUCAN__") || !html.includes("seek")) {
-    throw new GenerationError(
-      "Generated output is missing the __TOUCAN__ / seek contract.",
-      raw,
-    );
-  }
-
-  return html;
+/** One-shot repair: hand the broken file + its capture error back to the model. */
+export async function repair(opts: RepairOptions): Promise<string> {
+  const provider = resolveProvider(opts.provider);
+  const model = opts.model ?? DEFAULT_MODELS[provider];
+  const system = await readFile(opts.promptPath ?? SYSTEM_PROMPT_PATH, "utf8");
+  const userText = [
+    "The following HTML was generated for a Toucan video but FAILED during headless capture.",
+    "",
+    "ERROR:",
+    opts.error,
+    "",
+    "Return the COMPLETE corrected HTML file (same contract: one self-contained file; window.__TOUCAN__ with ready/durationMs/fps/seek; render(ms) total and pure; no CSS transitions). Fix the specific error AND any similar latent bugs — never reassign a const, guard every element/rect lookup so render(ms) cannot throw for any ms, and keep every scene a densely BUILT UI/diagram (no empty frames). Output ONLY the HTML, no commentary.",
+    "",
+    "--- BROKEN HTML ---",
+    opts.brokenHtml,
+  ].join("\n");
+  const raw = await callModel(provider, model, system, userText);
+  return checkContract(raw, "Repair output");
 }
