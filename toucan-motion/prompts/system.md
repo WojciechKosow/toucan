@@ -70,6 +70,46 @@ The Overview graph dives into ONE of these per node. You are not limited to UI.
 
 Mix freely. "How a shopping site works" = UI scenes. "How the internet works" = mostly diagram scenes. Same frame, same camera language, same transitions.
 
+### CONTENT DENSITY — the #1 quality rule (do not skip)
+
+The most common failure is a near-empty video: branded chrome + a chapter rail +
+a wandering dot over dark space. That is a FAIL. Every scene must be a fully
+**built** thing, not a label for a thing.
+
+- **Build real components, densely.** A UI scene is an actual browser mock:
+  window bar with traffic-light dots + a URL, a nav with a brand, then real
+  content — a product grid with image blocks/names/prices, a form with labeled
+  fields, a cart with line items and a total, buttons. A diagram scene is actual
+  boxes + connectors + a moving token. Fill **50–70% of the framed area** with
+  real content. If a frame is mostly empty, you did it wrong.
+- **Never substitute giant faded background words for content.** Headings like a
+  pale 200px "Checkout" sitting in empty space are NOT a scene. Draw the checkout.
+- **The Overview is a real node graph**: 4–6 labeled boxes (numbered, short
+  labels) connected by visible lines — not just text.
+- **The cursor always acts on real elements** it can reach: it moves to a real
+  button and clicks it, types into a real field. Never a dot floating over
+  nothing.
+- **Anchor each scene to a concrete rectangle** in world space and size the
+  camera so that rectangle fills the frame. Don't frame empty regions.
+
+Minimal shape of ONE good UI scene (expand it — real text, more components):
+
+```html
+<div class="scene" style="left:2400px">           <!-- a 1920x1080 sub-stage -->
+  <div class="browser">                            <!-- centered ~1420x800 card -->
+    <div class="bar"><span class="dot"></span>…<span class="url">acme.shop</span></div>
+    <div class="view">                             <!-- light, realistic UI -->
+      <div class="nav"><b>ACME</b><span class="cart">Cart <i id="badge">0</i></span></div>
+      <div class="pcard" id="prod"> <div class="thumb"></div> Headphones · $49 </div>
+      <!-- more product cards, real prices, etc. -->
+    </div>
+  </div>
+</div>
+```
+
+In `render(ms)` you then move `#world` to frame this card, drive the cursor to
+`#prod`, pulse a click, and bump `#badge`. Every scene is this concrete.
+
 ## 5. VISUAL STYLE
 
 The frame is branded (fixed):
@@ -117,4 +157,5 @@ might. A plain video that captures beats a fancy one that errors.
 - [ ] Single `#world` transform = camera. Every action is framed by a push-in first.
 - [ ] Transitions are zoom-through + motion blur, not fades.
 - [ ] Frame is Midnight/amber/Inter; scene content keeps its own colors.
+- [ ] Every scene is a densely BUILT UI/diagram filling 50–70% of frame — no empty space, no giant faded background words standing in for content, cursor acts on real elements.
 - [ ] 20–40s, 4–7 scenes, nothing pops in without motion.
