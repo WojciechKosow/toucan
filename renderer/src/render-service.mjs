@@ -1,19 +1,38 @@
-// Toucan renderer service (Section 4 — orchestration spine).
+// Toucan renderer service (Section 4 spine, now rendering the real Scene).
 //
-// A tiny, dependency-free HTTP service that proves the async render lifecycle:
+// A tiny HTTP service the Spring orchestrator dispatches to:
 //   Spring  --POST /render-->  here  --POST /api/internal/render-callback-->  Spring
 //
-// It does NOT render real compositions yet — that's Section 3. Until then it returns a
-// PLACEHOLDER MP4 (a structurally valid ftyp+mdat container) plus a 1x1 poster PNG, so the
-// end-to-end spine (queue -> dispatch -> callback -> storage -> READY) can be exercised.
-// A prompt containing FORCE_RENDER_FAILURE drives the FAILED path instead.
+// It renders the real Remotion `Scene` composition (debt #1): bundle the project
+// once, `selectComposition("Scene")` with the validated SceneSpec passed via
+// `inputProps` ({ spec, themeParams }), `renderMedia` to an MP4 (+ a first-frame
+// poster), then POST the artifact back on the signed callback. The validated spec
+// arrives as `specJson` in the dispatch; the keyless StubLlmClient path supplies a
+// known-good fixture upstream, so the offline pipeline renders unchanged here.
+//
+// A prompt containing FORCE_RENDER_FAILURE still drives the FAILED path.
+//
+// Rendering needs headless Chrome; the cloud sandbox has none, so the real render
+// runs on the maintainer's box. Importing this module does NOT bundle or launch
+// Chrome — that happens lazily on the first /render — so it loads fine anywhere.
 
 import http from "node:http";
-import zlib from "node:zlib";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { bundle } from "@remotion/bundler";
+import {
+  renderMedia,
+  renderStill,
+  selectComposition,
+} from "@remotion/renderer";
 
 const PORT = Number(process.env.RENDERER_PORT ?? 3001);
 const TOKEN = process.env.INTERNAL_RENDER_TOKEN ?? "dev-internal-render-token";
 const FAILURE_SENTINEL = "FORCE_RENDER_FAILURE";
+const COMPOSITION_ID = "Scene";
+const ENTRY_POINT = fileURLToPath(new URL("./index.ts", import.meta.url));
 
 const server = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") {
@@ -24,7 +43,7 @@ const server = http.createServer((req, res) => {
       if (err || !body?.jobId || !body?.callbackUrl) {
         return json(res, 400, { error: "jobId and callbackUrl are required" });
       }
-      // Accept the work immediately; report completion asynchronously (mirrors a real renderer).
+      // Accept immediately; report completion asynchronously (real renderers are slow).
       json(res, 202, { accepted: true, jobId: body.jobId });
       setImmediate(() => runRender(body));
     });
@@ -36,8 +55,25 @@ server.listen(PORT, () => {
   console.log(`[renderer] listening on :${PORT}`);
 });
 
+// ── real render ──
+
+// Bundle once and reuse the serve URL across jobs (bundling is expensive). Lazy so
+// that merely importing this module never triggers a webpack build.
+let bundlePromise = null;
+function getServeUrl() {
+  if (!bundlePromise) {
+    console.log("[renderer] bundling project…");
+    bundlePromise = bundle({ entryPoint: ENTRY_POINT }).then((url) => {
+      console.log("[renderer] bundle ready");
+      return url;
+    });
+  }
+  return bundlePromise;
+}
+
 async function runRender(job) {
-  const { jobId, animationId, prompt, callbackUrl } = job;
+  const { jobId, prompt, specJson, callbackUrl } = job;
+  let workdir;
   try {
     if (typeof prompt === "string" && prompt.includes(FAILURE_SENTINEL)) {
       await callback(callbackUrl, {
@@ -49,15 +85,49 @@ async function runRender(job) {
       return;
     }
 
-    const mp4 = makePlaceholderMp4(animationId);
-    const poster = makePlaceholderPng();
+    const spec = parseSpec(specJson);
+    const themeParams = job.themeParams ?? spec?.meta?.themeParams ?? {};
+    const inputProps = { spec, themeParams };
+
+    const serveUrl = await getServeUrl();
+    const composition = await selectComposition({
+      serveUrl,
+      id: COMPOSITION_ID,
+      inputProps,
+    });
+
+    workdir = await mkdtemp(path.join(tmpdir(), "toucan-render-"));
+    const mp4Path = path.join(workdir, "video.mp4");
+    const posterPath = path.join(workdir, "poster.png");
+
+    await renderMedia({
+      composition,
+      serveUrl,
+      codec: "h264",
+      outputLocation: mp4Path,
+      inputProps,
+    });
+    await renderStill({
+      composition,
+      serveUrl,
+      output: posterPath,
+      frame: 0,
+      inputProps,
+    });
+
+    const mp4 = await readFile(mp4Path);
+    const poster = await readFile(posterPath);
+    const durationMs = Math.round(
+      (composition.durationInFrames / composition.fps) * 1000,
+    );
+
     await callback(
       callbackUrl,
-      { jobId, status: "READY", durationMs: 3000 },
+      { jobId, status: "READY", durationMs },
       { mp4, poster },
     );
     console.log(
-      `[renderer] job ${jobId} -> READY (placeholder mp4 ${mp4.length}B)`,
+      `[renderer] job ${jobId} -> READY (${composition.durationInFrames}f @ ${composition.fps}fps, mp4 ${mp4.length}B)`,
     );
   } catch (e) {
     console.error(`[renderer] job ${jobId} errored:`, e);
@@ -70,8 +140,24 @@ async function runRender(job) {
     } catch (e2) {
       console.error(`[renderer] callback for ${jobId} also failed:`, e2);
     }
+  } finally {
+    if (workdir)
+      await rm(workdir, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+function parseSpec(specJson) {
+  if (typeof specJson !== "string" || specJson.trim() === "") {
+    throw new Error("render dispatch is missing specJson");
+  }
+  try {
+    return JSON.parse(specJson);
+  } catch (e) {
+    throw new Error(`specJson is not valid JSON: ${String(e?.message ?? e)}`);
+  }
+}
+
+// ── signed callback ──
 
 async function callback(url, fields, files = {}) {
   const form = new FormData();
@@ -101,55 +187,7 @@ async function callback(url, fields, files = {}) {
   }
 }
 
-// ── placeholder artifacts ──
-
-/** A structurally valid (non-playable) MP4: ftyp + mdat. Clearly a placeholder, not a fake codec. */
-function makePlaceholderMp4(animationId) {
-  const ftyp = box(
-    "ftyp",
-    Buffer.from("isom", "ascii"),
-    u32(0x200),
-    Buffer.from("isomiso2avc1mp41", "ascii"),
-  );
-  const note = Buffer.from(
-    `toucan placeholder render for ${animationId} — real compositions land in Section 3`,
-    "utf8",
-  );
-  return Buffer.concat([ftyp, box("mdat", note)]);
-}
-
-function box(type, ...parts) {
-  const body = Buffer.concat(parts);
-  return Buffer.concat([
-    u32(8 + body.length),
-    Buffer.from(type, "ascii"),
-    body,
-  ]);
-}
-
-/** A valid 1x1 black PNG, built with zlib + zlib.crc32 (Node >= 22.2). */
-function makePlaceholderPng() {
-  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  const ihdr = pngChunk(
-    "IHDR",
-    Buffer.concat([u32(1), u32(1), Buffer.from([8, 2, 0, 0, 0])]),
-  );
-  const idat = pngChunk("IDAT", zlib.deflateSync(Buffer.from([0, 0, 0, 0])));
-  const iend = pngChunk("IEND", Buffer.alloc(0));
-  return Buffer.concat([sig, ihdr, idat, iend]);
-}
-
-function pngChunk(type, data) {
-  const typeBuf = Buffer.from(type, "ascii");
-  const crc = u32(zlib.crc32(Buffer.concat([typeBuf, data])) >>> 0);
-  return Buffer.concat([u32(data.length), typeBuf, data, crc]);
-}
-
-function u32(n) {
-  const b = Buffer.alloc(4);
-  b.writeUInt32BE(n >>> 0);
-  return b;
-}
+// ── http helpers ──
 
 function json(res, status, payload) {
   const body = JSON.stringify(payload);

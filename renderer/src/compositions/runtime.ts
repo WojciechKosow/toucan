@@ -4,7 +4,12 @@
 // resolver) — never an inline switch on verb (build-plan rule).
 
 import type { Edge, SceneSpec, Verb } from "@toucan/spec";
-import type { LayoutResult } from "../layout/index.js";
+import {
+  LIVE_AREA,
+  SAFE_MARGIN,
+  type LayoutResult,
+  type NodeBox,
+} from "../layout/index.js";
 import type { Theme } from "../theme.js";
 import { msToFrames, progress } from "../timing.js";
 import type { Schedule, ScheduledStep } from "./schedule.js";
@@ -189,7 +194,37 @@ function applyHighlight(
   if (edge) edge.arrival = Math.max(edge.arrival, inAmt);
 }
 
+interface Bounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  w: number;
+  h: number;
+}
+
+function boundsOf(boxes: NodeBox[]): Bounds | null {
+  if (boxes.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const b of boxes) {
+    minX = Math.min(minX, b.x - b.width / 2);
+    minY = Math.min(minY, b.y - b.height / 2);
+    maxX = Math.max(maxX, b.x + b.width / 2);
+    maxY = Math.max(maxY, b.y + b.height / 2);
+  }
+  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+}
+
+/** Clamp a pan into [lo, hi]; if the content is wider than the window, center it. */
+function clampPan(v: number, lo: number, hi: number): number {
+  return lo > hi ? (lo + hi) / 2 : Math.max(lo, Math.min(hi, v));
+}
+
 function cameraTransform(
+  spec: SceneSpec,
   steps: ScheduledStep[],
   frame: number,
   fps: number,
@@ -200,16 +235,55 @@ function cameraTransform(
   const focusSteps = steps.filter((s) => s.verb === "camera.focus");
   if (focusSteps.length === 0) return identity;
 
+  // Immediate neighbors (edge-adjacent) of each element, for the §6 focus framing.
+  const neighbors = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => {
+    if (!neighbors.has(a)) neighbors.set(a, new Set());
+    neighbors.get(a)!.add(b);
+  };
+  for (const e of spec.edges ?? []) {
+    link(e.from, e.to);
+    link(e.to, e.from);
+  }
+  const graph = boundsOf(Object.values(layout.nodes));
+  const W = layout.stage.width;
+  const H = layout.stage.height;
+
   const targetFor = (id: string): CameraTransform => {
     const box = layout.nodes[id];
-    if (!box) return identity;
-    const scale = 1.35;
-    // translate so the focused box centers on the stage at the zoomed scale
-    return {
-      scale,
-      x: layout.stage.width / 2 - box.x * scale,
-      y: layout.stage.height / 2 - box.y * scale,
-    };
+    if (!box || !graph) return identity;
+
+    // §6: the target + its immediate neighbors must stay within the safe area.
+    const nbIds = new Set<string>([id, ...(neighbors.get(id) ?? [])]);
+    const nb =
+      boundsOf(
+        [...nbIds].map((i) => layout.nodes[i]).filter(Boolean) as NodeBox[],
+      ) ?? graph;
+
+    // Zoom to 1.35, eased down only if the neighborhood wouldn't otherwise fit.
+    const scale = Math.min(
+      1.35,
+      LIVE_AREA.width / Math.max(1, nb.w),
+      LIVE_AREA.height / Math.max(1, nb.h),
+    );
+
+    // Center the target, then clamp the pan so content stays inside the safe area
+    // — against the whole graph when it fits at this scale (so nothing clips at
+    // all), otherwise against the neighborhood (target + neighbors guaranteed in).
+    const fits =
+      graph.w * scale <= LIVE_AREA.width && graph.h * scale <= LIVE_AREA.height;
+    const b = fits ? graph : nb;
+    const x = clampPan(
+      W / 2 - box.x * scale,
+      SAFE_MARGIN - b.minX * scale,
+      W - SAFE_MARGIN - b.maxX * scale,
+    );
+    const y = clampPan(
+      H / 2 - box.y * scale,
+      SAFE_MARGIN - b.minY * scale,
+      H - SAFE_MARGIN - b.maxY * scale,
+    );
+    return { scale, x, y };
   };
 
   let from = identity;
@@ -291,6 +365,13 @@ export function deriveRenderState(
     if (handler) handler(ctx);
   }
 
-  state.camera = cameraTransform(schedule.steps, frame, fps, theme, layout);
+  state.camera = cameraTransform(
+    spec,
+    schedule.steps,
+    frame,
+    fps,
+    theme,
+    layout,
+  );
   return state;
 }
