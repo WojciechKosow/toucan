@@ -4,7 +4,7 @@
 //   toucan-motion render --topic "how a shopping site works" --out out/shop.mp4
 //     [--script path.txt]   beat-by-beat brief appended to the topic
 //     [--html path.html]    skip generation, capture an existing file (dev loop)
-//     [--model claude-opus-4-8]
+//     [--model gpt-4.1]
 //     [--fps 30]            override the HTML's declared fps
 //     [--keep-frames]       don't delete PNG frames after encode
 //     [--keep-html]         don't delete generated HTML after encode

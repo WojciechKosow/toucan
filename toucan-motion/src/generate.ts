@@ -1,14 +1,16 @@
 // Step 6 — generation: a topic (+ optional script) -> one self-contained HTML
-// string, via the Anthropic API with prompts/system.md as the system prompt.
+// string, via the OpenAI API with prompts/system.md as the system prompt.
 // No auto-repair loop in v0.1: if the output doesn't honor the contract we fail
 // loudly and hand back the raw text for inspection.
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 
-export const DEFAULT_MODEL = "claude-opus-4-8";
-const MAX_TOKENS = 32000;
+export const DEFAULT_MODEL = "gpt-4.1";
+// Safe across gpt-4.1 (32k cap) and gpt-4o (16k cap); raise if your model allows
+// and a richer HTML gets truncated.
+const MAX_OUTPUT_TOKENS = 16000;
 const SYSTEM_PROMPT_PATH = fileURLToPath(
   new URL("../prompts/system.md", import.meta.url),
 );
@@ -45,10 +47,10 @@ function stripFences(text: string): string {
 }
 
 export async function generate(opts: GenerateOptions): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error(
-      "ANTHROPIC_API_KEY is not set. Put it in .env (see .env.example), or use --html to capture an existing file without generating.",
+      "OPENAI_API_KEY is not set. Put it in .env (see .env.example), or use --html to capture an existing file without generating.",
     );
   }
 
@@ -57,19 +59,17 @@ export async function generate(opts: GenerateOptions): Promise<string> {
     ? `Topic: ${opts.topic}\n\nBeat-by-beat script (follow these beats):\n${opts.script}`
     : `Topic: ${opts.topic}`;
 
-  const client = new Anthropic({ apiKey });
-  const message = await client.messages.create({
+  const client = new OpenAI({ apiKey });
+  const completion = await client.chat.completions.create({
     model: opts.model ?? DEFAULT_MODEL,
-    max_tokens: MAX_TOKENS,
-    system,
-    messages: [{ role: "user", content: userText }],
+    max_completion_tokens: MAX_OUTPUT_TOKENS,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: userText },
+    ],
   });
 
-  const raw = message.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-
+  const raw = completion.choices[0]?.message?.content ?? "";
   const html = stripFences(raw);
 
   // Basic sanity check only (no repair loop in v0.1).
