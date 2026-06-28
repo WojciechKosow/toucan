@@ -20,12 +20,18 @@ const MAX_OUTPUT_TOKENS = 16000;
 const SYSTEM_PROMPT_PATH = fileURLToPath(
   new URL("../prompts/system.md", import.meta.url),
 );
+const REFERENCE_PATH = fileURLToPath(
+  new URL("../fixtures/reference.html", import.meta.url),
+);
 
 export interface GenerateOptions {
   topic: string;
   script?: string;
   provider?: Provider;
   model?: string;
+  /** mock=true returns fixtures/reference.html verbatim (ignores topic) — exercises
+   *  the whole topic->MP4 path with no API key / no spend. */
+  mock?: boolean;
   /** Override the system prompt file (defaults to prompts/system.md). */
   promptPath?: string;
 }
@@ -114,26 +120,34 @@ async function callModel(
     .join("");
 }
 
-function checkContract(raw: string, what: string): string {
+/** Strip fences and reject empty output (the contract itself is gated by
+ *  validateHtml in validate.ts, not here). */
+function finalize(raw: string, what: string): string {
   const html = stripFences(raw);
-  if (!html.includes("__TOUCAN__") || !html.includes("seek")) {
-    throw new GenerationError(
-      `${what} is missing the __TOUCAN__ / seek contract.`,
-      raw,
-    );
+  if (!html.trim()) {
+    throw new GenerationError(`${what} was empty.`, raw);
   }
   return html;
 }
 
-export async function generate(opts: GenerateOptions): Promise<string> {
+/**
+ * topic -> one self-contained HTML string.
+ * - mock: returns fixtures/reference.html verbatim (no API key, no spend).
+ * - real: OpenAI/Anthropic call; strip fences; throw (with raw) on empty output.
+ * Contract validity is checked separately by validateHtml().
+ */
+export async function generateHtml(opts: GenerateOptions): Promise<string> {
+  if (opts.mock) {
+    return readFile(REFERENCE_PATH, "utf8");
+  }
   const provider = resolveProvider(opts.provider);
   const model = opts.model ?? DEFAULT_MODELS[provider];
   const system = await readFile(opts.promptPath ?? SYSTEM_PROMPT_PATH, "utf8");
   const userText = opts.script
-    ? `Topic: ${opts.topic}\n\nBeat-by-beat script (follow these beats):\n${opts.script}`
-    : `Topic: ${opts.topic}`;
+    ? `${opts.topic}\n\n${opts.script}`
+    : opts.topic;
   const raw = await callModel(provider, model, system, userText);
-  return checkContract(raw, "Generated output");
+  return finalize(raw, "Generated output");
 }
 
 /** One-shot repair: hand the broken file + its capture error back to the model. */
@@ -153,5 +167,5 @@ export async function repair(opts: RepairOptions): Promise<string> {
     opts.brokenHtml,
   ].join("\n");
   const raw = await callModel(provider, model, system, userText);
-  return checkContract(raw, "Repair output");
+  return finalize(raw, "Repair output");
 }

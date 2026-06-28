@@ -16,6 +16,8 @@ export interface CaptureResult {
   fps: number;
   frameCount: number;
   durationMs: number;
+  /** __TOUCAN_DONE__ after a final seek(durationMs). */
+  done: boolean;
 }
 
 const READY_TIMEOUT_MS = 30000;
@@ -192,7 +194,23 @@ export async function capture(
       });
     }
 
-    return { framesDir, fps, frameCount, durationMs };
+    // Final seek to the end so the page can flip __TOUCAN_DONE__ (the contract's
+    // end-of-render signal). Doesn't affect the captured frames above.
+    const done = await page.evaluate((ms) => {
+      const t = (
+        window as unknown as {
+          __TOUCAN__: { seek: (ms: number) => void };
+          __TOUCAN_DONE__?: boolean;
+        }
+      ).__TOUCAN__;
+      t.seek(ms);
+      return (
+        (window as unknown as { __TOUCAN_DONE__?: boolean }).__TOUCAN_DONE__ ===
+        true
+      );
+    }, durationMs);
+
+    return { framesDir, fps, frameCount, durationMs, done };
   } finally {
     if (browser) await browser.close();
   }
