@@ -21,7 +21,7 @@ for a minimal reference implementation.
 ```bash
 npm install
 npx playwright install chromium   # one-time: download the browser
-cp .env.example .env              # then add your OPENAI_API_KEY (only needed for --topic)
+cp .env.example .env              # add OPENAI_API_KEY and/or ANTHROPIC_API_KEY (only for --topic)
 npm run build                     # compile TS -> dist/ (or use `npm run dev` to run from source)
 ```
 
@@ -37,7 +37,8 @@ toucan-motion render --html <file.html> --out <file.mp4> [options]
   --out <file.mp4>   Output MP4 path (required).
   --script <file>    Beat-by-beat brief appended to the topic.
   --html <file>      Capture an existing HTML file; skip generation (no API key needed).
-  --model <id>       OpenAI model (default: gpt-4.1).
+  --provider <name>  openai | anthropic (default: openai, or whichever key is set).
+  --model <id>       Model id (default: gpt-4.1 for openai, claude-opus-4-8 for anthropic).
   --fps <n>          Override the HTML's declared fps.
   --keep-frames      Keep the PNG frames after encoding.
   --keep-html        Keep generated HTML after encoding.
@@ -45,10 +46,11 @@ toucan-motion render --html <file.html> --out <file.mp4> [options]
 
 ### Examples
 
-Generate from a topic (needs `OPENAI_API_KEY`):
+Generate from a topic (needs an API key for the chosen provider):
 
 ```bash
 toucan-motion render --topic "how a shopping site works" --out out/shop.mp4
+toucan-motion render --topic "how a shopping site works" --out out/shop.mp4 --provider anthropic
 ```
 
 Capture the reference HTML (no API key — the fast dev loop):
@@ -67,9 +69,12 @@ npm run dev -- render --html fixtures/reference.html --out out/ref.mp4
 ## How it works
 
 1. **generate** (`src/generate.ts`) — sends `prompts/system.md` + your topic to
-   OpenAI, strips any markdown fence, sanity-checks the `__TOUCAN__`/`seek`
-   contract, and writes `out/<slug>/index.html`. No auto-repair loop in v0.1: on
-   a contract miss it fails loudly and saves the raw output to `out/<slug>/raw.txt`.
+   OpenAI or Anthropic (`--provider`), strips any markdown fence, sanity-checks
+   the `__TOUCAN__`/`seek` contract, and writes `out/<slug>/index.html`.
+   **One-shot auto-repair:** if capture then fails the contract (never becomes
+   ready, or `render(ms)` throws), the broken file + the exact error are sent
+   back to the model once for a fix and re-captured. If it still fails, the raw
+   output is saved to `out/<slug>/raw.txt`.
 2. **capture** (`src/capture.ts`) — launches headless Chromium at 1920×1080,
    waits for `__TOUCAN__.ready` and for fonts to settle, neutralizes the page's
    autoplay loop, then for each frame calls `seek(ms)` and screenshots. It owns
@@ -92,9 +97,11 @@ file, not a capture bug.
   browser exists under `PLAYWRIGHT_BROWSERS_PATH` (CI/sandbox), it's used instead.
 - **ffmpeg**: `ffmpeg-static` is the default. If that binary can't run in your
   environment, set `FFMPEG_PATH=/path/to/ffmpeg` to use another build.
-- **Model default**: `gpt-4.1`. Override with `--model` (e.g. `gpt-4o`). If you
-  switch to a model with a smaller output cap, lower `MAX_OUTPUT_TOKENS` in
-  `src/generate.ts`.
+- **Provider/model**: `--provider openai` (default, model `gpt-4.1`) or
+  `--provider anthropic` (model `claude-opus-4-8`). Override the model with
+  `--model`. If you switch to a model with a smaller output cap, lower
+  `MAX_OUTPUT_TOKENS` in `src/generate.ts`. One-shot auto-repair runs through the
+  same provider.
 
 ## Out of scope (v0.1)
 
