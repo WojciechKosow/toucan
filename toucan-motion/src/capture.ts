@@ -18,7 +18,7 @@ export interface CaptureResult {
   durationMs: number;
 }
 
-const READY_TIMEOUT_MS = 15000;
+const READY_TIMEOUT_MS = 30000;
 
 /**
  * Resolve a Chromium executable. Prefers Playwright's own managed browser (normal
@@ -81,15 +81,59 @@ export async function capture(
       deviceScaleFactor: 1,
     });
     const page = await context.newPage();
+
+    // Collect failures from the page so a timeout reports *why* (the generated
+    // HTML usually threw before it could set __TOUCAN__.ready).
+    const pageErrors: string[] = [];
+    const consoleErrors: string[] = [];
+    page.on("pageerror", (e) => pageErrors.push(e.message ?? String(e)));
+    page.on("console", (m) => {
+      if (m.type() === "error") consoleErrors.push(m.text());
+    });
+
     await page.goto(pathToFileURL(absHtml).href);
 
-    await page.waitForFunction(
-      () =>
-        (window as unknown as { __TOUCAN__?: { ready?: boolean } }).__TOUCAN__
-          ?.ready === true,
-      undefined,
-      { timeout: READY_TIMEOUT_MS },
-    );
+    try {
+      await page.waitForFunction(
+        () =>
+          (window as unknown as { __TOUCAN__?: { ready?: boolean } }).__TOUCAN__
+            ?.ready === true,
+        undefined,
+        { timeout: READY_TIMEOUT_MS },
+      );
+    } catch {
+      const diag = await page
+        .evaluate(() => {
+          const t = (window as unknown as { __TOUCAN__?: Record<string, unknown> })
+            .__TOUCAN__;
+          return t
+            ? {
+                present: true,
+                ready: t.ready,
+                seek: typeof t.seek,
+                durationMs: t.durationMs,
+                fps: t.fps,
+              }
+            : { present: false };
+        })
+        .catch(() => null);
+      const lines = [
+        `Timed out after ${READY_TIMEOUT_MS}ms waiting for window.__TOUCAN__.ready === true.`,
+        diag
+          ? diag.present
+            ? `  __TOUCAN__ is present but ready=${JSON.stringify(diag.ready)} (seek=${diag.seek}, durationMs=${diag.durationMs}, fps=${diag.fps}). It defined the API but never flipped ready — usually a JS error in render(0), or the fonts gate has no 500ms fallback.`
+            : `  window.__TOUCAN__ is MISSING — the page script didn't run (syntax error) or never created it.`
+          : `  (could not read window.__TOUCAN__)`,
+        pageErrors.length
+          ? `  Uncaught page errors:\n    - ${pageErrors.join("\n    - ")}`
+          : `  (no uncaught page errors captured)`,
+        consoleErrors.length
+          ? `  Console errors:\n    - ${consoleErrors.slice(0, 5).join("\n    - ")}`
+          : ``,
+        `  This is a contract bug in the HTML (${absHtml}), not a capture bug. Open it in a browser with DevTools, or re-generate.`,
+      ].filter(Boolean);
+      throw new Error(lines.join("\n"));
+    }
 
     // The HTML caps its own font wait at 500ms so the clock isn't blocked, which
     // can leave fonts still loading when `ready` flips. For capture we wait for
