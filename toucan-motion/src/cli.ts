@@ -17,7 +17,12 @@
 import "dotenv/config";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { capture, type CaptureResult } from "./capture.js";
+import {
+  ENGINES,
+  capture,
+  type CaptureEngine,
+  type CaptureResult,
+} from "./capture.js";
 import { encode } from "./encode.js";
 import {
   DEFAULT_MODELS,
@@ -40,6 +45,7 @@ interface Flags {
   html?: string;
   model?: string;
   provider?: string;
+  engine?: string;
   out?: string;
   fps?: number;
   mock: boolean;
@@ -53,6 +59,7 @@ const VALUE_FLAGS: Record<string, keyof Flags> = {
   "--html": "html",
   "--model": "model",
   "--provider": "provider",
+  "--engine": "engine",
   "--out": "out",
   "--fps": "fps",
 };
@@ -74,7 +81,9 @@ render options:
   --out <file.mp4>   Output MP4 path (required).
   --script <file>    Beat-by-beat brief appended to the topic.
   --html <file>      Capture an existing HTML file; skip generation (no API key needed).
-  --mock             Use fixtures/reference.html instead of the API (no key, no spend).
+  --mock             Use the engine's reference fixture instead of the API (no key, no spend).
+  --engine <name>    seek (default; render(ms) contract, no CSS motion) | vt (natural CSS
+                     animation captured on a virtual clock — higher motion quality).
   --provider <name>  openai | anthropic (default: openai, or whichever key is set).
   --model <id>       Model id (default: ${DEFAULT_MODELS.openai} for openai, ${DEFAULT_MODELS.anthropic} for anthropic).
   --fps <n>          Override the HTML's declared fps.
@@ -83,11 +92,13 @@ render options:
 
 check:
   --html <file>      Run the static contract gate + determinism check; print PASS/FAIL.
+  --engine <name>    Which contract to check against (default seek).
 
 Examples:
   toucan-motion render --topic "how a shopping site works" --mock --out out/mock.mp4
-  toucan-motion render --topic "how a shopping site works" --out out/shop.mp4
-  toucan-motion check  --html fixtures/reference.html`;
+  toucan-motion render --topic "how a shopping site works" --out out/shop.mp4 --engine vt
+  toucan-motion check  --html fixtures/reference.html
+  toucan-motion check  --html fixtures/css-anim.html --engine vt`;
 
 function parseFlags(args: string[]): Flags {
   const flags: Flags = { mock: false, keepFrames: false, keepHtml: false };
@@ -143,10 +154,20 @@ function report(label: string, r: ValidationResult): void {
   for (const e of r.errors) console.log(`        error: ${e}`);
 }
 
+function resolveEngine(flags: Flags): CaptureEngine {
+  if (flags.engine && !ENGINES.includes(flags.engine as CaptureEngine))
+    fail(`--engine must be one of: ${ENGINES.join(", ")}`);
+  return (flags.engine as CaptureEngine) ?? "seek";
+}
+
 async function checkCmd(flags: Flags): Promise<void> {
   if (!flags.html) fail("check requires --html <file>");
-  console.log(`check ${flags.html}`);
-  const { static: staticResult, runtime } = await validateFile(flags.html);
+  const engine = resolveEngine(flags);
+  console.log(`check ${flags.html} (engine: ${engine})`);
+  const { static: staticResult, runtime } = await validateFile(
+    flags.html,
+    engine,
+  );
   report("static contract", staticResult);
   report("runtime determinism", runtime);
   const ok = staticResult.ok && runtime.ok;
@@ -155,8 +176,11 @@ async function checkCmd(flags: Flags): Promise<void> {
 }
 
 /** Static-gate freshly written HTML; on failure keep the file and exit non-zero. */
-async function staticGate(htmlPath: string): Promise<void> {
-  const res = validateHtml(await readFile(htmlPath, "utf8"));
+async function staticGate(
+  htmlPath: string,
+  engine: CaptureEngine,
+): Promise<void> {
+  const res = validateHtml(await readFile(htmlPath, "utf8"), engine);
   for (const w of res.warnings) console.log(`      warn: ${w}`);
   if (!res.ok) {
     for (const e of res.errors) console.log(`      error: ${e}`);
@@ -175,6 +199,7 @@ async function renderCmd(flags: Flags): Promise<void> {
   if (flags.provider && !PROVIDERS.includes(flags.provider as Provider))
     fail(`--provider must be one of: ${PROVIDERS.join(", ")}`);
   const provider = resolveProvider(flags.provider);
+  const engine = resolveEngine(flags);
 
   const slug = flags.html
     ? basename(flags.html).replace(/\.html?$/i, "")
@@ -190,8 +215,8 @@ async function renderCmd(flags: Flags): Promise<void> {
     console.log(`using existing HTML: ${htmlPath}`);
   } else {
     const src = flags.mock
-      ? "mock (fixtures/reference.html)"
-      : `${provider}/${flags.model ?? DEFAULT_MODELS[provider]}`;
+      ? `mock (${engine} reference fixture)`
+      : `${provider}/${flags.model ?? DEFAULT_MODELS[provider]}, engine ${engine}`;
     console.log(`generating HTML for "${flags.topic}" (${src})…`);
     let script: string | undefined;
     if (flags.script) script = await readFile(flags.script, "utf8");
@@ -203,6 +228,7 @@ async function renderCmd(flags: Flags): Promise<void> {
         script,
         provider,
         model: flags.model,
+        engine,
         mock: flags.mock,
       });
       await writeFile(htmlPath, html, "utf8");
@@ -219,14 +245,14 @@ async function renderCmd(flags: Flags): Promise<void> {
 
     // 2) Static contract gate — never encode garbage.
     console.log(`validating contract…`);
-    await staticGate(htmlPath);
+    await staticGate(htmlPath, engine);
   }
 
   // 3) Capture frames. For real generations, one auto-repair pass on failure.
-  console.log(`capturing frames…`);
+  console.log(`capturing frames (engine: ${engine})…`);
   let cap: CaptureResult;
   try {
-    cap = await capture(htmlPath, framesDir, { fps: flags.fps });
+    cap = await capture(htmlPath, framesDir, { fps: flags.fps, engine });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!repairable) throw err; // --html / mock: surface the diagnostic
@@ -239,6 +265,7 @@ async function renderCmd(flags: Flags): Promise<void> {
         error: msg,
         provider,
         model: flags.model,
+        engine,
       });
       await writeFile(htmlPath, fixed, "utf8");
     } catch (rerr) {
@@ -250,9 +277,9 @@ async function renderCmd(flags: Flags): Promise<void> {
       throw rerr;
     }
     console.log(`re-validating repaired HTML…`);
-    await staticGate(htmlPath);
+    await staticGate(htmlPath, engine);
     console.log(`re-capturing…`);
-    cap = await capture(htmlPath, framesDir, { fps: flags.fps }); // one attempt
+    cap = await capture(htmlPath, framesDir, { fps: flags.fps, engine }); // one attempt
   }
   console.log(
     `  ${cap.frameCount} frames @ ${cap.fps}fps (${(cap.durationMs / 1000).toFixed(2)}s)`,

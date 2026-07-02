@@ -7,32 +7,40 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
+import type { CaptureEngine } from "./capture.js";
 
 export type Provider = "openai" | "anthropic";
 export const PROVIDERS: Provider[] = ["openai", "anthropic"];
 export const DEFAULT_MODELS: Record<Provider, string> = {
   openai: "gpt-4.1",
-  anthropic: "claude-opus-4-8",
+  anthropic: "claude-sonnet-5",
 };
-// Safe across gpt-4.1 / gpt-4o / claude; raise if your model allows and a richer
-// HTML gets truncated.
-const MAX_OUTPUT_TOKENS = 16000;
-const SYSTEM_PROMPT_PATH = fileURLToPath(
-  new URL("../prompts/system.md", import.meta.url),
-);
-const REFERENCE_PATH = fileURLToPath(
-  new URL("../fixtures/reference.html", import.meta.url),
-);
+// OpenAI: safe across gpt-4.1 (32k cap) / gpt-4o (16k cap).
+const MAX_OUTPUT_TOKENS_OPENAI = 16000;
+// Anthropic: claude-sonnet-5 allows up to 128k output; we stream (required for
+// large max_tokens) so rich HTML never truncates.
+const MAX_OUTPUT_TOKENS_ANTHROPIC = 64000;
+const PROMPT_PATHS: Record<CaptureEngine, string> = {
+  seek: fileURLToPath(new URL("../prompts/system.md", import.meta.url)),
+  vt: fileURLToPath(new URL("../prompts/system-vt.md", import.meta.url)),
+};
+const MOCK_PATHS: Record<CaptureEngine, string> = {
+  seek: fileURLToPath(new URL("../fixtures/reference.html", import.meta.url)),
+  vt: fileURLToPath(new URL("../fixtures/css-anim.html", import.meta.url)),
+};
 
 export interface GenerateOptions {
   topic: string;
   script?: string;
   provider?: Provider;
   model?: string;
-  /** mock=true returns fixtures/reference.html verbatim (ignores topic) — exercises
-   *  the whole topic->MP4 path with no API key / no spend. */
+  /** Selects the contract the model writes to: seek (render(ms), no CSS motion)
+   *  or vt (natural CSS animation, dormant until __TOUCAN_START__). */
+  engine?: CaptureEngine;
+  /** mock=true returns the engine's reference fixture verbatim (ignores topic) —
+   *  exercises the whole topic->MP4 path with no API key / no spend. */
   mock?: boolean;
-  /** Override the system prompt file (defaults to prompts/system.md). */
+  /** Override the system prompt file (defaults to the engine's prompt). */
   promptPath?: string;
 }
 
@@ -41,6 +49,7 @@ export interface RepairOptions {
   error: string;
   provider?: Provider;
   model?: string;
+  engine?: CaptureEngine;
   promptPath?: string;
 }
 
@@ -92,7 +101,7 @@ async function callModel(
     const client = new OpenAI({ apiKey });
     const completion = await client.chat.completions.create({
       model,
-      max_completion_tokens: MAX_OUTPUT_TOKENS,
+      max_completion_tokens: MAX_OUTPUT_TOKENS_OPENAI,
       messages: [
         { role: "system", content: system },
         { role: "user", content: userText },
@@ -108,12 +117,15 @@ async function callModel(
     );
   }
   const client = new Anthropic({ apiKey });
-  const message = await client.messages.create({
+  // Stream (required for large max_tokens to avoid HTTP timeouts) and collect
+  // the final message.
+  const stream = client.messages.stream({
     model,
-    max_tokens: MAX_OUTPUT_TOKENS,
+    max_tokens: MAX_OUTPUT_TOKENS_ANTHROPIC,
     system,
     messages: [{ role: "user", content: userText }],
   });
+  const message = await stream.finalMessage();
   return message.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
@@ -132,17 +144,18 @@ function finalize(raw: string, what: string): string {
 
 /**
  * topic -> one self-contained HTML string.
- * - mock: returns fixtures/reference.html verbatim (no API key, no spend).
+ * - mock: returns the engine's reference fixture verbatim (no API key, no spend).
  * - real: OpenAI/Anthropic call; strip fences; throw (with raw) on empty output.
  * Contract validity is checked separately by validateHtml().
  */
 export async function generateHtml(opts: GenerateOptions): Promise<string> {
+  const engine = opts.engine ?? "seek";
   if (opts.mock) {
-    return readFile(REFERENCE_PATH, "utf8");
+    return readFile(MOCK_PATHS[engine], "utf8");
   }
   const provider = resolveProvider(opts.provider);
   const model = opts.model ?? DEFAULT_MODELS[provider];
-  const system = await readFile(opts.promptPath ?? SYSTEM_PROMPT_PATH, "utf8");
+  const system = await readFile(opts.promptPath ?? PROMPT_PATHS[engine], "utf8");
   const userText = opts.script
     ? `${opts.topic}\n\n${opts.script}`
     : opts.topic;
@@ -150,18 +163,24 @@ export async function generateHtml(opts: GenerateOptions): Promise<string> {
   return finalize(raw, "Generated output");
 }
 
+const REPAIR_CONTRACT: Record<CaptureEngine, string> = {
+  seek: "same contract: one self-contained file; window.__TOUCAN__ with ready/durationMs/fps/seek; render(ms) total and pure — it must not throw for any ms; no CSS transitions/@keyframes",
+  vt: "same contract: one self-contained file; window.__TOUCAN__ with ready/durationMs/fps; window.__TOUCAN_START__ that begins a timeline which is FULLY DORMANT before it; autoplay only when !window.__TOUCAN_RECORDER__; natural CSS animation is allowed",
+};
+
 /** One-shot repair: hand the broken file + its capture error back to the model. */
 export async function repair(opts: RepairOptions): Promise<string> {
+  const engine = opts.engine ?? "seek";
   const provider = resolveProvider(opts.provider);
   const model = opts.model ?? DEFAULT_MODELS[provider];
-  const system = await readFile(opts.promptPath ?? SYSTEM_PROMPT_PATH, "utf8");
+  const system = await readFile(opts.promptPath ?? PROMPT_PATHS[engine], "utf8");
   const userText = [
     "The following HTML was generated for a Toucan video but FAILED during headless capture.",
     "",
     "ERROR:",
     opts.error,
     "",
-    "Return the COMPLETE corrected HTML file (same contract: one self-contained file; window.__TOUCAN__ with ready/durationMs/fps/seek; render(ms) total and pure; no CSS transitions). Fix the specific error AND any similar latent bugs — never reassign a const, guard every element/rect lookup so render(ms) cannot throw for any ms, and keep every scene a densely BUILT UI/diagram (no empty frames). Output ONLY the HTML, no commentary.",
+    `Return the COMPLETE corrected HTML file (${REPAIR_CONTRACT[engine]}). Fix the specific error AND any similar latent bugs — never reassign a const, guard every element lookup so the timeline cannot throw, and keep every scene a densely BUILT UI/diagram (no empty frames). Output ONLY the HTML, no commentary.`,
     "",
     "--- BROKEN HTML ---",
     opts.brokenHtml,
