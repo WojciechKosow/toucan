@@ -24,10 +24,15 @@ import {
   GenerationError,
   PROVIDERS,
   type Provider,
-  generate,
+  generateHtml,
   repair,
   resolveProvider,
 } from "./generate.js";
+import {
+  validateFile,
+  validateHtml,
+  type ValidationResult,
+} from "./validate.js";
 
 interface Flags {
   topic?: string;
@@ -37,6 +42,7 @@ interface Flags {
   provider?: string;
   out?: string;
   fps?: number;
+  mock: boolean;
   keepFrames: boolean;
   keepHtml: boolean;
 }
@@ -51,6 +57,7 @@ const VALUE_FLAGS: Record<string, keyof Flags> = {
   "--fps": "fps",
 };
 const BOOL_FLAGS: Record<string, keyof Flags> = {
+  "--mock": "mock",
   "--keep-frames": "keepFrames",
   "--keep-html": "keepHtml",
 };
@@ -60,24 +67,30 @@ const USAGE = `toucan-motion — topic -> explainer MP4 (v0.1)
 Usage:
   toucan-motion render --topic "<topic>" --out <file.mp4> [options]
   toucan-motion render --html <file.html> --out <file.mp4> [options]
+  toucan-motion check  --html <file.html>
 
-Options:
+render options:
   --topic <text>     Topic to explain (required unless --html).
   --out <file.mp4>   Output MP4 path (required).
   --script <file>    Beat-by-beat brief appended to the topic.
   --html <file>      Capture an existing HTML file; skip generation (no API key needed).
+  --mock             Use fixtures/reference.html instead of the API (no key, no spend).
   --provider <name>  openai | anthropic (default: openai, or whichever key is set).
   --model <id>       Model id (default: ${DEFAULT_MODELS.openai} for openai, ${DEFAULT_MODELS.anthropic} for anthropic).
   --fps <n>          Override the HTML's declared fps.
   --keep-frames      Keep the PNG frames after encoding.
   --keep-html        Keep generated HTML after encoding.
 
+check:
+  --html <file>      Run the static contract gate + determinism check; print PASS/FAIL.
+
 Examples:
+  toucan-motion render --topic "how a shopping site works" --mock --out out/mock.mp4
   toucan-motion render --topic "how a shopping site works" --out out/shop.mp4
-  toucan-motion render --html fixtures/reference.html --out out/ref.mp4`;
+  toucan-motion check  --html fixtures/reference.html`;
 
 function parseFlags(args: string[]): Flags {
-  const flags: Flags = { keepFrames: false, keepHtml: false };
+  const flags: Flags = { mock: false, keepFrames: false, keepHtml: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a in VALUE_FLAGS) {
@@ -118,16 +131,43 @@ function slugify(s: string): string {
   );
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
-  const cmd = argv[0];
-  if (cmd === "--help" || cmd === "-h" || cmd === undefined) {
-    console.log(USAGE);
-    process.exit(cmd === undefined ? 1 : 0);
-  }
-  if (cmd !== "render") fail(`Unknown command: ${cmd}`);
+/** Exit with a message but without dumping the usage block (for run-time failures). */
+function die(msg: string): never {
+  console.error(`\n${msg}`);
+  process.exit(1);
+}
 
-  const flags = parseFlags(argv.slice(1));
+function report(label: string, r: ValidationResult): void {
+  console.log(`[${r.ok ? "PASS" : "FAIL"}] ${label}`);
+  for (const w of r.warnings) console.log(`        warn:  ${w}`);
+  for (const e of r.errors) console.log(`        error: ${e}`);
+}
+
+async function checkCmd(flags: Flags): Promise<void> {
+  if (!flags.html) fail("check requires --html <file>");
+  console.log(`check ${flags.html}`);
+  const { static: staticResult, runtime } = await validateFile(flags.html);
+  report("static contract", staticResult);
+  report("runtime determinism", runtime);
+  const ok = staticResult.ok && runtime.ok;
+  console.log(`\n${ok ? "PASS" : "FAIL"} — ${flags.html}`);
+  process.exit(ok ? 0 : 1);
+}
+
+/** Static-gate freshly written HTML; on failure keep the file and exit non-zero. */
+async function staticGate(htmlPath: string): Promise<void> {
+  const res = validateHtml(await readFile(htmlPath, "utf8"));
+  for (const w of res.warnings) console.log(`      warn: ${w}`);
+  if (!res.ok) {
+    for (const e of res.errors) console.log(`      error: ${e}`);
+    die(
+      `Contract validation FAILED for ${htmlPath} (kept for inspection). Not encoding.`,
+    );
+  }
+  console.log(`      contract OK`);
+}
+
+async function renderCmd(flags: Flags): Promise<void> {
   if (!flags.out) fail("--out is required");
   if (!flags.html && !flags.topic) fail("either --topic or --html is required");
   if (flags.fps !== undefined && (!Number.isFinite(flags.fps) || flags.fps <= 0))
@@ -142,53 +182,56 @@ async function main() {
   const workDir = join("out", slug);
   const framesDir = join(workDir, "frames");
 
-  // 1) Obtain HTML — either an existing file (dev loop) or freshly generated.
+  // 1) Obtain HTML — existing file (dev loop), mock, or freshly generated.
   let htmlPath: string;
-  let generated = false;
+  let repairable = false; // only real generations are repair-eligible
   if (flags.html) {
     htmlPath = flags.html;
-    console.log(`[1/3] using existing HTML: ${htmlPath}`);
+    console.log(`using existing HTML: ${htmlPath}`);
   } else {
-    console.log(
-      `[1/3] generating HTML for "${flags.topic}" (${provider}/${flags.model ?? DEFAULT_MODELS[provider]})…`,
-    );
+    const src = flags.mock
+      ? "mock (fixtures/reference.html)"
+      : `${provider}/${flags.model ?? DEFAULT_MODELS[provider]}`;
+    console.log(`generating HTML for "${flags.topic}" (${src})…`);
     let script: string | undefined;
-    if (flags.script) {
-      script = await readFile(flags.script, "utf8");
-    }
+    if (flags.script) script = await readFile(flags.script, "utf8");
     htmlPath = join(workDir, "index.html");
     await mkdir(workDir, { recursive: true });
     try {
-      const html = await generate({
+      const html = await generateHtml({
         topic: flags.topic!,
         script,
         provider,
         model: flags.model,
+        mock: flags.mock,
       });
       await writeFile(htmlPath, html, "utf8");
-      generated = true;
-      console.log(`      wrote ${htmlPath}`);
+      repairable = !flags.mock;
+      console.log(`  wrote ${htmlPath}`);
     } catch (err) {
       if (err instanceof GenerationError) {
         const rawPath = join(workDir, "raw.txt");
         await writeFile(rawPath, err.raw, "utf8");
-        fail(`${err.message} Raw model output saved to ${rawPath}`);
+        die(`${err.message} Raw model output saved to ${rawPath}`);
       }
       throw err;
     }
+
+    // 2) Static contract gate — never encode garbage.
+    console.log(`validating contract…`);
+    await staticGate(htmlPath);
   }
 
-  // 2) Capture frames. If we generated the HTML and capture hits a contract bug,
-  //    do ONE auto-repair pass (feed the broken file + error back to the model).
-  console.log(`[2/3] capturing frames…`);
+  // 3) Capture frames. For real generations, one auto-repair pass on failure.
+  console.log(`capturing frames…`);
   let cap: CaptureResult;
   try {
     cap = await capture(htmlPath, framesDir, { fps: flags.fps });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (!generated) throw err; // --html: surface the diagnostic, don't touch the file
-    console.log(`      capture failed:\n${indent(msg)}`);
-    console.log(`[2b/3] auto-repairing once (${provider})…`);
+    if (!repairable) throw err; // --html / mock: surface the diagnostic
+    console.log(`  capture failed:\n${indent(msg)}`);
+    console.log(`auto-repairing once (${provider})…`);
     const broken = await readFile(htmlPath, "utf8");
     try {
       const fixed = await repair({
@@ -198,34 +241,48 @@ async function main() {
         model: flags.model,
       });
       await writeFile(htmlPath, fixed, "utf8");
-      console.log(`      re-capturing repaired HTML…`);
     } catch (rerr) {
       if (rerr instanceof GenerationError) {
         const rawPath = join(workDir, "raw.txt");
         await writeFile(rawPath, rerr.raw, "utf8");
-        fail(`Repair failed: ${rerr.message} Raw output saved to ${rawPath}`);
+        die(`Repair failed: ${rerr.message} Raw output saved to ${rawPath}`);
       }
       throw rerr;
     }
+    console.log(`re-validating repaired HTML…`);
+    await staticGate(htmlPath);
+    console.log(`re-capturing…`);
     cap = await capture(htmlPath, framesDir, { fps: flags.fps }); // one attempt
   }
   console.log(
-    `      ${cap.frameCount} frames @ ${cap.fps}fps (${(cap.durationMs / 1000).toFixed(2)}s)`,
+    `  ${cap.frameCount} frames @ ${cap.fps}fps (${(cap.durationMs / 1000).toFixed(2)}s)`,
   );
 
-  // 3) Encode MP4.
-  console.log(`[3/3] encoding ${flags.out}…`);
+  // 4) Encode MP4.
+  console.log(`encoding ${flags.out}…`);
   await encode(framesDir, cap.fps, flags.out);
 
-  // Cleanup.
   if (!flags.keepFrames) await rm(framesDir, { recursive: true, force: true });
-  if (generated && !flags.keepHtml)
+  if (!flags.html && !flags.keepHtml)
     await rm(dirname(htmlPath), { recursive: true, force: true });
 
   console.log(`done -> ${flags.out}`);
 }
 
+async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  const cmd = argv[0];
+  if (cmd === "--help" || cmd === "-h" || cmd === undefined) {
+    console.log(USAGE);
+    process.exit(cmd === undefined ? 1 : 0);
+  }
+  const flags = parseFlags(argv.slice(1));
+  if (cmd === "render") return renderCmd(flags);
+  if (cmd === "check") return checkCmd(flags);
+  fail(`Unknown command: ${cmd}`);
+}
+
 main().catch((err) => {
-  console.error(`\nrender failed: ${err?.message ?? err}`);
+  console.error(`\nfailed: ${err?.message ?? err}`);
   process.exit(1);
 });

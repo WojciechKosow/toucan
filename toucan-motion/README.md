@@ -32,11 +32,13 @@ Requires Node 20+. ffmpeg ships via `ffmpeg-static` — no system ffmpeg needed.
 ```
 toucan-motion render --topic "<topic>" --out <file.mp4> [options]
 toucan-motion render --html <file.html> --out <file.mp4> [options]
+toucan-motion check  --html <file.html>
 
   --topic <text>     Topic to explain (required unless --html).
   --out <file.mp4>   Output MP4 path (required).
   --script <file>    Beat-by-beat brief appended to the topic.
   --html <file>      Capture an existing HTML file; skip generation (no API key needed).
+  --mock             Use fixtures/reference.html instead of the API (no key, no spend).
   --provider <name>  openai | anthropic (default: openai, or whichever key is set).
   --model <id>       Model id (default: gpt-4.1 for openai, claude-opus-4-8 for anthropic).
   --fps <n>          Override the HTML's declared fps.
@@ -53,10 +55,22 @@ toucan-motion render --topic "how a shopping site works" --out out/shop.mp4
 toucan-motion render --topic "how a shopping site works" --out out/shop.mp4 --provider anthropic
 ```
 
+Run the whole topic→MP4 path with no API key (mock = the reference stub):
+
+```bash
+toucan-motion render --topic "how a shopping site works" --mock --out out/mock.mp4
+```
+
 Capture the reference HTML (no API key — the fast dev loop):
 
 ```bash
 toucan-motion render --html fixtures/reference.html --out out/ref.mp4
+```
+
+Gate any HTML against the contract (static + determinism):
+
+```bash
+toucan-motion check --html fixtures/reference.html   # PASS
 ```
 
 Run without a global install via the built binary or from source:
@@ -68,20 +82,33 @@ npm run dev -- render --html fixtures/reference.html --out out/ref.mp4
 
 ## How it works
 
-1. **generate** (`src/generate.ts`) — sends `prompts/system.md` + your topic to
-   OpenAI or Anthropic (`--provider`), strips any markdown fence, sanity-checks
-   the `__TOUCAN__`/`seek` contract, and writes `out/<slug>/index.html`.
-   **One-shot auto-repair:** if capture then fails the contract (never becomes
-   ready, or `render(ms)` throws), the broken file + the exact error are sent
-   back to the model once for a fix and re-captured. If it still fails, the raw
-   output is saved to `out/<slug>/raw.txt`.
-2. **capture** (`src/capture.ts`) — launches headless Chromium at 1920×1080,
-   waits for `__TOUCAN__.ready` and for fonts to settle, neutralizes the page's
-   autoplay loop, then for each frame calls `seek(ms)` and screenshots. It owns
-   the clock, so output is frame-perfect.
-3. **encode** (`src/encode.ts`) — `ffmpeg-static` muxes the PNG frames into a
-   1080p H.264 MP4 (`yuv420p`, CRF 18, `+faststart`), bit-exact and with metadata
-   stripped so the same frames always produce the same bytes.
+1. **generate** (`src/generate.ts`) — `generateHtml({topic, …, mock})`. With
+   `--mock` it returns `fixtures/reference.html` verbatim (no API key); otherwise
+   it sends `prompts/system.md` + your topic to OpenAI or Anthropic (`--provider`),
+   strips any markdown fence, and writes `out/<slug>/index.html`.
+2. **validate** (`src/validate.ts`) — the contract gate. `validateHtml()` is a
+   static check: required members (`window.__TOUCAN__`, `seek`, `ready`,
+   `durationMs`, `fps`, `__TOUCAN_DONE__`) and forbidden CSS (`@keyframes`,
+   `transition:`, `animation:` inside `<style>`/`style=`) that would break
+   seeking. `render` runs it right after generation and **refuses to encode** if
+   it fails (the HTML is kept for inspection). `validateRender()` captures the
+   file twice and proves frames at 25/50/75% are byte-identical (determinism).
+3. **capture** (`src/capture.ts`) — headless Chromium at 1920×1080; waits for
+   `__TOUCAN__.ready` + fonts, neutralizes the autoplay loop, `seek(ms)` +
+   screenshot per frame. Owns the clock, so output is frame-perfect. On a
+   generated-HTML failure, `render` does **one auto-repair pass** (broken file +
+   error back to the model) then re-validates and re-captures.
+4. **encode** (`src/encode.ts`) — `ffmpeg-static` muxes the PNGs into a 1080p
+   H.264 MP4 (`yuv420p`, CRF 18, `+faststart`), bit-exact, metadata stripped.
+
+### `check` — the gate you live in during prompt tuning
+
+```bash
+toucan-motion check --html <file>   # static contract + determinism; prints PASS/FAIL, exits non-zero on FAIL
+```
+
+`fixtures/bad-transition.html` is the reference with one illegal `transition:`
+added — `check` on it FAILs (naming the violation), proving the gate bites.
 
 ## Determinism
 
