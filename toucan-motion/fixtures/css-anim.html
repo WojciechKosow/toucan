@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Toucan — vt-engine reference (natural CSS animation)</title>
+    <style>
+      /* vt engine: CSS animations/transitions are ALLOWED — the recorder drives a
+         virtual clock, so they advance deterministically. Everything is dormant
+         until __TOUCAN_START__() adds .play to #stage. */
+      html,
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #0b0f17;
+      }
+      #stage {
+        position: fixed;
+        inset: 0;
+        background: #0b0f17;
+        font-family:
+          Georgia,
+          "Times New Roman",
+          serif;
+        color: #e6eaf2;
+      }
+      #title {
+        position: absolute;
+        top: 56px;
+        left: 72px;
+        font-size: 40px;
+        font-weight: 700;
+      }
+      /* 1) CSS @keyframes: box slides + hue shifts over 2s, starts at t=0 */
+      #box {
+        position: absolute;
+        left: 100px;
+        top: 420px;
+        width: 220px;
+        height: 220px;
+        border-radius: 28px;
+        background: #3ddc97;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        color: #0b0f17;
+      }
+      @keyframes slide {
+        from {
+          transform: translateX(0) rotate(0deg);
+          background: #3ddc97;
+        }
+        to {
+          transform: translateX(1400px) rotate(180deg);
+          background: #4c8dff;
+        }
+      }
+      .play #box {
+        animation: slide 2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+      /* 2) CSS transition: label fades/rises when .visible is added at t=1000 */
+      #label {
+        position: absolute;
+        left: 72px;
+        top: 760px;
+        font-size: 56px;
+        opacity: 0;
+        transform: translateY(30px);
+        transition:
+          opacity 1s ease,
+          transform 1s ease;
+      }
+      #label.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      /* 3) rAF-driven counter (JS clock, virtualized under the recorder) */
+      #counter {
+        position: absolute;
+        right: 96px;
+        top: 56px;
+        font-size: 64px;
+        font-variant-numeric: tabular-nums;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="title">vt-engine test rig</div>
+      <div id="box">CSS</div>
+      <div id="label">transition fired at t=1s</div>
+      <div id="counter">0</div>
+    </div>
+
+    <script>
+      (function () {
+        "use strict";
+        var DUR = 4000;
+        var FPS = 30;
+        var stage = document.getElementById("stage");
+        var label = document.getElementById("label");
+        var counter = document.getElementById("counter");
+
+        var started = false;
+        function start() {
+          if (started) return;
+          started = true;
+
+          // Kick off ALL motion from this instant:
+          stage.classList.add("play"); // CSS @keyframes begin
+          setTimeout(function () {
+            label.classList.add("visible"); // CSS transition at t=1000
+          }, 1000);
+
+          // rAF counter: elapsed ms since start (performance.now is virtualized
+          // by the recorder, real-time for human preview).
+          var t0 = performance.now();
+          function tick(now) {
+            var ms = Math.min(DUR, now - t0);
+            counter.textContent = String(Math.floor(ms));
+            if (ms < DUR) requestAnimationFrame(tick);
+            else window.__TOUCAN_DONE__ = true;
+          }
+          requestAnimationFrame(tick);
+
+          // Belt-and-suspenders completion signal on the (virtual) clock.
+          setTimeout(function () {
+            window.__TOUCAN_DONE__ = true;
+          }, DUR);
+        }
+
+        window.__TOUCAN__ = {
+          ready: false,
+          durationMs: DUR,
+          fps: FPS,
+          version: "0.2-vt",
+        };
+        window.__TOUCAN_DONE__ = false;
+        window.__TOUCAN_START__ = start;
+
+        var fontsReady =
+          document.fonts && document.fonts.ready
+            ? document.fonts.ready
+            : Promise.resolve();
+        var timeout = new Promise(function (r) {
+          setTimeout(r, 500);
+        });
+        Promise.race([fontsReady, timeout]).then(function () {
+          window.__TOUCAN__.ready = true;
+          // Autoplay for human preview ONLY. The recorder sets
+          // window.__TOUCAN_RECORDER__ before any script runs and calls
+          // __TOUCAN_START__ itself once it owns the clock.
+          if (!window.__TOUCAN_RECORDER__) start();
+        });
+      })();
+    </script>
+  </body>
+</html>
