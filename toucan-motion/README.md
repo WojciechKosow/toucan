@@ -1,16 +1,31 @@
 # toucan-motion (v0.1)
 
-> **Throwaway / beta.** A standalone CLI that turns a topic into an explainer MP4
-> via the HTML path. This is a separate codebase from the SceneSpec/Remotion
-> engine and will be retired when v0.2 lands. Optimized for "works and looks
-> rendered," not for architecture.
+> **Throwaway / beta.** A standalone CLI that turns a topic into an explainer
+> animation via the HTML path. This is a separate codebase from the
+> SceneSpec/Remotion engine and will be retired when v0.2 lands. Optimized for
+> "works and looks rendered," not for architecture.
+
+Two products today:
 
 ```
-topic/script  →  LLM generates one self-contained HTML  →  headless Chromium
-              →  frame-perfect capture (we own the clock)  →  ffmpeg → MP4
+generate: topic/script  →  LLM generates one self-contained HTML animation  →  the HTML file
+                           (freeform engine — natural CSS/JS, autoplay, NO capture contract;
+                            open it in a browser. MP4 capture for this path comes later.)
+
+render:   topic/script  →  LLM generates one self-contained HTML  →  headless Chromium
+                        →  frame-perfect capture (we own the clock)  →  ffmpeg → MP4
 ```
 
-Two capture engines, both deterministic because the recorder owns the clock:
+**`generate` is the current quality path** — it writes to
+`prompts/system-freeform.md`, which keeps the full art direction (the
+guided-tour spine, focal discipline, theme, cursor, rhythm) but drops the
+determinism contract so the model can animate with the browser's own easing and
+compositor. The output is gated by a self-containment check plus a
+headless-Chromium **smoke test** (zero uncaught errors, a real DOM, visible
+motion), with one auto-repair pass on failure.
+
+`render` keeps the two capture engines, both deterministic because the recorder
+owns the clock:
 
 - **`seek`** (default) — the HTML drives all animation from a single
   `render(ms)` function and exposes
@@ -41,16 +56,19 @@ Requires Node 20+. ffmpeg ships via `ffmpeg-static` — no system ffmpeg needed.
 ## Usage
 
 ```
+toucan-motion generate --topic "<topic>" [--out <file.html>] [options]
 toucan-motion render --topic "<topic>" --out <file.mp4> [options]
 toucan-motion render --html <file.html> --out <file.mp4> [options]
-toucan-motion check  --html <file.html> [--engine seek|vt]
+toucan-motion check  --html <file.html> [--engine seek|vt|freeform]
 
   --topic <text>     Topic to explain (required unless --html).
-  --out <file.mp4>   Output MP4 path (required).
+  --out <file>       generate: output HTML path (default out/<topic-slug>.html).
+                     render: output MP4 path (required).
   --script <file>    Beat-by-beat brief appended to the topic.
   --html <file>      Capture an existing HTML file; skip generation (no API key needed).
   --mock             Use the engine's reference fixture instead of the API (no key, no spend).
-  --engine <name>    seek (default) | vt (natural CSS animation on a virtual clock).
+  --engine <name>    render: seek (default) | vt (natural CSS animation on a virtual clock).
+                     check: also freeform (self-containment + headless smoke test).
   --provider <name>  openai | anthropic (default: openai, or whichever key is set).
   --model <id>       Model id (default: gpt-4.1 for openai, claude-sonnet-5 for anthropic).
   --fps <n>          Override the HTML's declared fps.
@@ -60,7 +78,17 @@ toucan-motion check  --html <file.html> [--engine seek|vt]
 
 ### Examples
 
-Generate from a topic (needs an API key for the chosen provider):
+Generate the animation HTML itself (the current quality path — open the file in
+a browser to watch it; needs an API key unless `--mock`):
+
+```bash
+toucan-motion generate --topic "how a shopping site works" --provider anthropic
+toucan-motion generate --topic "how a shopping site works" --script beats.txt --out out/shop.html
+toucan-motion generate --topic "how a shopping site works" --mock   # no key, no spend
+toucan-motion check    --html out/shop.html --engine freeform       # re-run the gate
+```
+
+Render an MP4 via the capture engines (needs an API key for the chosen provider):
 
 ```bash
 toucan-motion render --topic "how a shopping site works" --out out/shop.mp4
@@ -101,8 +129,14 @@ npm run dev -- render --html fixtures/reference.html --out out/ref.mp4
 1. **generate** (`src/generate.ts`) — `generateHtml({topic, …, engine, mock})`.
    With `--mock` it returns the engine's reference fixture verbatim (no API
    key); otherwise it sends the engine's prompt (`prompts/system.md` for seek,
-   `prompts/system-vt.md` for vt) + your topic to OpenAI or Anthropic
-   (`--provider`), strips any markdown fence, and writes `out/<slug>/index.html`.
+   `prompts/system-vt.md` for vt, `prompts/system-freeform.md` for freeform)
+   + your topic to OpenAI or Anthropic (`--provider`), strips any markdown
+   fence, and writes the HTML. For the freeform path the gate is
+   `src/freeform.ts`: a static self-containment check (inline JS only, a
+   Google Fonts `<link>` allowed) plus a headless-Chromium smoke test — zero
+   uncaught page errors, a real DOM (≥12 elements), and visible motion between
+   screenshots at 0.6s/2s/4s. One auto-repair pass on failure; the HTML is
+   always kept (it IS the deliverable).
 2. **validate** (`src/validate.ts`) — the contract gate, engine-aware.
    `validateHtml()` is a static check: required members for the engine
    (`seek` for seek; `__TOUCAN_START__` + a `__TOUCAN_RECORDER__` autoplay guard
