@@ -1,0 +1,13 @@
+Title card: "How a login works" fades in on a dark screen, then shrinks to a caption in the top-left.
+
+Beat 1 — The form: a clean login card slides up in the center: email field, password field, a "Sign in" button. Caption: "1. You enter your credentials."
+
+Beat 2 — The request: the email + password lift out of the form and travel as a small packet along an arrow to a server icon on the right. Caption: "2. Sent securely to the server."
+
+Beat 3 — The check: the server icon pulses while it compares against a small database cylinder below it. A checkmark appears. Caption: "3. The server verifies you."
+
+Beat 4 — The token: a glowing "JWT" token travels back along the arrow from the server to the browser. Caption: "4. You get a token."
+
+Beat 5 — Logged in: the login card is replaced by a simple dashboard (a sidebar + a couple of cards). Caption: "5. You're in."
+
+Keep it calm and readable. One idea on screen at a time. Accent color green.
