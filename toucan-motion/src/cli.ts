@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 // Step 7 — CLI: ties generation + capture + encode together.
 //
+//   toucan-motion generate --topic "how a shopping site works" --out out/shop.html
+//     topic -> ANIMATION HTML (freeform engine: natural CSS/JS, no capture
+//     contract). The HTML file IS the deliverable; it's gated by a static
+//     self-containment check + a headless-Chromium smoke test (zero uncaught
+//     errors, real DOM, visible motion), with one auto-repair pass on failure.
+//
 //   toucan-motion render --topic "how a shopping site works" --out out/shop.mp4
 //     [--script path.txt]   beat-by-beat brief appended to the topic
 //     [--html path.html]    skip generation, capture an existing file (dev loop)
@@ -24,10 +30,13 @@ import {
   type CaptureResult,
 } from "./capture.js";
 import { encode } from "./encode.js";
+import { smokeTest, validateFreeformHtml } from "./freeform.js";
 import {
   DEFAULT_MODELS,
+  GEN_ENGINES,
   GenerationError,
   PROVIDERS,
+  type GenEngine,
   type Provider,
   generateHtml,
   repair,
@@ -69,14 +78,26 @@ const BOOL_FLAGS: Record<string, keyof Flags> = {
   "--keep-html": "keepHtml",
 };
 
-const USAGE = `toucan-motion — topic -> explainer MP4 (v0.1)
+const USAGE = `toucan-motion — topic -> explainer animation (v0.1)
 
 Usage:
+  toucan-motion generate --topic "<topic>" [--out <file.html>] [options]
   toucan-motion render --topic "<topic>" --out <file.mp4> [options]
   toucan-motion render --html <file.html> --out <file.mp4> [options]
-  toucan-motion check  --html <file.html>
+  toucan-motion check  --html <file.html> [--engine seek|vt|freeform]
 
-render options:
+generate — topic -> ANIMATION HTML (the current product; open it in a browser):
+  --topic <text>     Topic to explain (required).
+  --out <file.html>  Output HTML path (default: out/<topic-slug>.html).
+  --script <file>    Beat-by-beat brief appended to the topic.
+  --mock             Use the reference fixture instead of the API (no key, no spend).
+  --provider <name>  openai | anthropic (default: openai, or whichever key is set).
+  --model <id>       Model id (default: ${DEFAULT_MODELS.openai} for openai, ${DEFAULT_MODELS.anthropic} for anthropic).
+  Uses the freeform engine: natural CSS/JS animation, autoplay, NO capture
+  contract. Gated by a self-containment check + a headless smoke test (zero
+  uncaught errors, real DOM, visible motion); one auto-repair pass on failure.
+
+render — topic/HTML -> MP4 (capture engines only):
   --topic <text>     Topic to explain (required unless --html).
   --out <file.mp4>   Output MP4 path (required).
   --script <file>    Beat-by-beat brief appended to the topic.
@@ -91,14 +112,17 @@ render options:
   --keep-html        Keep generated HTML after encoding.
 
 check:
-  --html <file>      Run the static contract gate + determinism check; print PASS/FAIL.
-  --engine <name>    Which contract to check against (default seek).
+  --html <file>      Gate an HTML file; print PASS/FAIL.
+  --engine <name>    seek | vt: static contract + determinism check.
+                     freeform: self-containment + headless smoke test.
 
 Examples:
+  toucan-motion generate --topic "how a shopping site works" --out out/shop.html
+  toucan-motion generate --topic "how a shopping site works" --mock
   toucan-motion render --topic "how a shopping site works" --mock --out out/mock.mp4
   toucan-motion render --topic "how a shopping site works" --out out/shop.mp4 --engine vt
   toucan-motion check  --html fixtures/reference.html
-  toucan-motion check  --html fixtures/css-anim.html --engine vt`;
+  toucan-motion check  --html out/shop.html --engine freeform`;
 
 function parseFlags(args: string[]): Flags {
   const flags: Flags = { mock: false, keepFrames: false, keepHtml: false };
@@ -155,21 +179,40 @@ function report(label: string, r: ValidationResult): void {
 }
 
 function resolveEngine(flags: Flags): CaptureEngine {
+  if (flags.engine === "freeform")
+    fail(
+      "--engine freeform has no capture contract and cannot be rendered to MP4 yet — use `toucan-motion generate` to produce the HTML",
+    );
   if (flags.engine && !ENGINES.includes(flags.engine as CaptureEngine))
     fail(`--engine must be one of: ${ENGINES.join(", ")}`);
   return (flags.engine as CaptureEngine) ?? "seek";
 }
 
+function resolveGenEngine(flags: Flags): GenEngine {
+  if (flags.engine && !GEN_ENGINES.includes(flags.engine as GenEngine))
+    fail(`--engine must be one of: ${GEN_ENGINES.join(", ")}`);
+  return (flags.engine as GenEngine) ?? "seek";
+}
+
 async function checkCmd(flags: Flags): Promise<void> {
   if (!flags.html) fail("check requires --html <file>");
-  const engine = resolveEngine(flags);
+  const engine = resolveGenEngine(flags);
   console.log(`check ${flags.html} (engine: ${engine})`);
-  const { static: staticResult, runtime } = await validateFile(
-    flags.html,
-    engine,
-  );
-  report("static contract", staticResult);
-  report("runtime determinism", runtime);
+  let staticResult: ValidationResult;
+  let runtime: ValidationResult;
+  if (engine === "freeform") {
+    staticResult = validateFreeformHtml(await readFile(flags.html, "utf8"));
+    report("static (self-contained)", staticResult);
+    runtime = await smokeTest(flags.html);
+    report("runtime smoke", runtime);
+  } else {
+    ({ static: staticResult, runtime } = await validateFile(
+      flags.html,
+      engine,
+    ));
+    report("static contract", staticResult);
+    report("runtime determinism", runtime);
+  }
   const ok = staticResult.ok && runtime.ok;
   console.log(`\n${ok ? "PASS" : "FAIL"} — ${flags.html}`);
   process.exit(ok ? 0 : 1);
@@ -191,10 +234,107 @@ async function staticGate(
   console.log(`      contract OK`);
 }
 
+/** Run the freeform gate (static + smoke); returns the merged result. */
+async function freeformGate(htmlPath: string): Promise<ValidationResult> {
+  const staticResult = validateFreeformHtml(await readFile(htmlPath, "utf8"));
+  report("static (self-contained)", staticResult);
+  if (!staticResult.ok) return staticResult;
+  const runtime = await smokeTest(htmlPath);
+  report("runtime smoke", runtime);
+  return {
+    ok: runtime.ok,
+    errors: runtime.errors,
+    warnings: [...staticResult.warnings, ...runtime.warnings],
+  };
+}
+
+/** generate — topic -> animation HTML (freeform engine, no capture contract).
+ *  The HTML file is the deliverable and is ALWAYS kept, pass or fail. */
+async function generateCmd(flags: Flags): Promise<void> {
+  if (!flags.topic) fail("generate requires --topic");
+  if (flags.html)
+    fail("generate writes HTML; --html only applies to render/check");
+  if (flags.provider && !PROVIDERS.includes(flags.provider as Provider))
+    fail(`--provider must be one of: ${PROVIDERS.join(", ")}`);
+  if (flags.engine && flags.engine !== "freeform")
+    fail(
+      "generate always uses the freeform engine (natural CSS/JS, no capture contract); use render for seek/vt",
+    );
+  const provider = resolveProvider(flags.provider);
+  const outPath = flags.out ?? join("out", `${slugify(flags.topic)}.html`);
+
+  const src = flags.mock
+    ? "mock (freeform reference fixture)"
+    : `${provider}/${flags.model ?? DEFAULT_MODELS[provider]}, engine freeform`;
+  console.log(`generating animation HTML for "${flags.topic}" (${src})…`);
+  let script: string | undefined;
+  if (flags.script) script = await readFile(flags.script, "utf8");
+  await mkdir(dirname(outPath), { recursive: true });
+  try {
+    const html = await generateHtml({
+      topic: flags.topic,
+      script,
+      provider,
+      model: flags.model,
+      engine: "freeform",
+      mock: flags.mock,
+    });
+    await writeFile(outPath, html, "utf8");
+    console.log(`  wrote ${outPath}`);
+  } catch (err) {
+    if (err instanceof GenerationError) {
+      const rawPath = outPath.replace(/\.html?$/i, "") + ".raw.txt";
+      await writeFile(rawPath, err.raw, "utf8");
+      die(`${err.message} Raw model output saved to ${rawPath}`);
+    }
+    throw err;
+  }
+
+  console.log(`gating (self-containment + headless smoke)…`);
+  let result = await freeformGate(outPath);
+
+  // One auto-repair pass — real generations only (a broken mock is our bug).
+  if (!result.ok && !flags.mock) {
+    console.log(`auto-repairing once (${provider})…`);
+    const broken = await readFile(outPath, "utf8");
+    try {
+      const fixed = await repair({
+        brokenHtml: broken,
+        error: result.errors.join("\n"),
+        provider,
+        model: flags.model,
+        engine: "freeform",
+      });
+      await writeFile(outPath, fixed, "utf8");
+    } catch (rerr) {
+      if (rerr instanceof GenerationError) {
+        const rawPath = outPath.replace(/\.html?$/i, "") + ".raw.txt";
+        await writeFile(rawPath, rerr.raw, "utf8");
+        die(`Repair failed: ${rerr.message} Raw output saved to ${rawPath}`);
+      }
+      throw rerr;
+    }
+    console.log(`re-gating repaired HTML…`);
+    result = await freeformGate(outPath);
+  }
+
+  if (!result.ok) {
+    die(
+      `Freeform gate FAILED for ${outPath} (file kept for inspection — open it in a browser with DevTools).`,
+    );
+  }
+  console.log(
+    `\nPASS — ${outPath}\nopen it in a browser to watch the animation`,
+  );
+}
+
 async function renderCmd(flags: Flags): Promise<void> {
   if (!flags.out) fail("--out is required");
   if (!flags.html && !flags.topic) fail("either --topic or --html is required");
-  if (flags.fps !== undefined && (!Number.isFinite(flags.fps) || flags.fps <= 0))
+  if (
+    flags.fps !== undefined &&
+    (!Number.isFinite(flags.fps) || flags.fps <= 0)
+  )
     fail("--fps must be a positive number");
   if (flags.provider && !PROVIDERS.includes(flags.provider as Provider))
     fail(`--provider must be one of: ${PROVIDERS.join(", ")}`);
@@ -304,6 +444,7 @@ async function main(): Promise<void> {
     process.exit(cmd === undefined ? 1 : 0);
   }
   const flags = parseFlags(argv.slice(1));
+  if (cmd === "generate") return generateCmd(flags);
   if (cmd === "render") return renderCmd(flags);
   if (cmd === "check") return checkCmd(flags);
   fail(`Unknown command: ${cmd}`);

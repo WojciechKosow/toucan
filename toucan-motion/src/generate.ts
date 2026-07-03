@@ -15,18 +15,31 @@ export const DEFAULT_MODELS: Record<Provider, string> = {
   openai: "gpt-4.1",
   anthropic: "claude-sonnet-5",
 };
+/** What the model writes to: a capture contract (seek/vt) or freeform —
+ *  natural HTML/CSS/JS animation with NO capture contract (the deliverable is
+ *  the HTML itself; capture for freeform comes later). */
+export type GenEngine = CaptureEngine | "freeform";
+export const GEN_ENGINES: GenEngine[] = ["seek", "vt", "freeform"];
 // OpenAI: safe across gpt-4.1 (32k cap) / gpt-4o (16k cap).
 const MAX_OUTPUT_TOKENS_OPENAI = 16000;
 // Anthropic: claude-sonnet-5 allows up to 128k output; we stream (required for
 // large max_tokens) so rich HTML never truncates.
 const MAX_OUTPUT_TOKENS_ANTHROPIC = 64000;
-const PROMPT_PATHS: Record<CaptureEngine, string> = {
+const PROMPT_PATHS: Record<GenEngine, string> = {
   seek: fileURLToPath(new URL("../prompts/system.md", import.meta.url)),
   vt: fileURLToPath(new URL("../prompts/system-vt.md", import.meta.url)),
+  freeform: fileURLToPath(
+    new URL("../prompts/system-freeform.md", import.meta.url),
+  ),
 };
-const MOCK_PATHS: Record<CaptureEngine, string> = {
+const MOCK_PATHS: Record<GenEngine, string> = {
   seek: fileURLToPath(new URL("../fixtures/reference.html", import.meta.url)),
   vt: fileURLToPath(new URL("../fixtures/css-anim.html", import.meta.url)),
+  // css-anim.html autoplays in a plain browser (no __TOUCAN_RECORDER__), so it
+  // exercises the freeform path too until a dedicated freeform fixture exists.
+  freeform: fileURLToPath(
+    new URL("../fixtures/css-anim.html", import.meta.url),
+  ),
 };
 
 export interface GenerateOptions {
@@ -34,9 +47,10 @@ export interface GenerateOptions {
   script?: string;
   provider?: Provider;
   model?: string;
-  /** Selects the contract the model writes to: seek (render(ms), no CSS motion)
-   *  or vt (natural CSS animation, dormant until __TOUCAN_START__). */
-  engine?: CaptureEngine;
+  /** Selects the contract the model writes to: seek (render(ms), no CSS motion),
+   *  vt (natural CSS animation, dormant until __TOUCAN_START__), or freeform
+   *  (natural animation, autoplay, no capture contract). */
+  engine?: GenEngine;
   /** mock=true returns the engine's reference fixture verbatim (ignores topic) —
    *  exercises the whole topic->MP4 path with no API key / no spend. */
   mock?: boolean;
@@ -49,7 +63,7 @@ export interface RepairOptions {
   error: string;
   provider?: Provider;
   model?: string;
-  engine?: CaptureEngine;
+  engine?: GenEngine;
   promptPath?: string;
 }
 
@@ -155,17 +169,20 @@ export async function generateHtml(opts: GenerateOptions): Promise<string> {
   }
   const provider = resolveProvider(opts.provider);
   const model = opts.model ?? DEFAULT_MODELS[provider];
-  const system = await readFile(opts.promptPath ?? PROMPT_PATHS[engine], "utf8");
-  const userText = opts.script
-    ? `${opts.topic}\n\n${opts.script}`
-    : opts.topic;
+  const system = await readFile(
+    opts.promptPath ?? PROMPT_PATHS[engine],
+    "utf8",
+  );
+  const userText = opts.script ? `${opts.topic}\n\n${opts.script}` : opts.topic;
   const raw = await callModel(provider, model, system, userText);
   return finalize(raw, "Generated output");
 }
 
-const REPAIR_CONTRACT: Record<CaptureEngine, string> = {
+const REPAIR_CONTRACT: Record<GenEngine, string> = {
   seek: "same contract: one self-contained file; window.__TOUCAN__ with ready/durationMs/fps/seek; render(ms) total and pure — it must not throw for any ms; no CSS transitions/@keyframes",
   vt: "same contract: one self-contained file; window.__TOUCAN__ with ready/durationMs/fps; window.__TOUCAN_START__ that begins a timeline which is FULLY DORMANT before it; autoplay only when !window.__TOUCAN_RECORDER__; natural CSS animation is allowed",
+  freeform:
+    "same requirements: ONE self-contained HTML file (inline CSS/JS; a Google Fonts <link> is the only external resource allowed); 1920×1080 16:9 stage; it AUTOPLAYS on load and visibly animates; natural CSS/JS animation is allowed and encouraged; the script must run start-to-finish with ZERO uncaught errors",
 };
 
 /** One-shot repair: hand the broken file + its capture error back to the model. */
@@ -173,7 +190,10 @@ export async function repair(opts: RepairOptions): Promise<string> {
   const engine = opts.engine ?? "seek";
   const provider = resolveProvider(opts.provider);
   const model = opts.model ?? DEFAULT_MODELS[provider];
-  const system = await readFile(opts.promptPath ?? PROMPT_PATHS[engine], "utf8");
+  const system = await readFile(
+    opts.promptPath ?? PROMPT_PATHS[engine],
+    "utf8",
+  );
   const userText = [
     "The following HTML was generated for a Toucan video but FAILED during headless capture.",
     "",

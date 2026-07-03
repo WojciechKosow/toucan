@@ -46,7 +46,7 @@ const VT_FRAME_TIMEOUT_MS = 15000;
  * pre-provisioned under PLAYWRIGHT_BROWSERS_PATH (CI / sandbox), since the bundled
  * Playwright revision may not match what's installed there.
  */
-function resolveChromiumPath(): string | undefined {
+export function resolveChromiumPath(): string | undefined {
   try {
     const managed = chromium.executablePath();
     if (managed && existsSync(managed)) return managed;
@@ -134,8 +134,9 @@ async function waitReady(
   } catch {
     const diag = await page
       .evaluate(() => {
-        const t = (window as unknown as { __TOUCAN__?: Record<string, unknown> })
-          .__TOUCAN__;
+        const t = (
+          window as unknown as { __TOUCAN__?: Record<string, unknown> }
+        ).__TOUCAN__;
         return t
           ? {
               present: true,
@@ -266,7 +267,9 @@ async function captureSeek(
         await page.evaluate(
           (ms) =>
             (
-              window as unknown as { __TOUCAN__: { seek: (ms: number) => void } }
+              window as unknown as {
+                __TOUCAN__: { seek: (ms: number) => void };
+              }
             ).__TOUCAN__.seek(ms),
           t,
         );
@@ -422,8 +425,9 @@ async function captureVt(
     // must NOT autoplay when __TOUCAN_RECORDER__ is set — it waits for
     // __TOUCAN_START__() so the timeline begins on OUR clock, not the wall clock.
     await page.addInitScript(() => {
-      (window as unknown as { __TOUCAN_RECORDER__: boolean }).__TOUCAN_RECORDER__ =
-        true;
+      (
+        window as unknown as { __TOUCAN_RECORDER__: boolean }
+      ).__TOUCAN_RECORDER__ = true;
     });
 
     // Run the page's load on a fixed virtual-time budget: once navigation
@@ -519,8 +523,9 @@ async function captureVt(
     // relative value back to the 0.1 grid cancels the phase entirely, so CSS
     // animation/transition progress is bit-identical across runs.
     await page.evaluate(() => {
-      (window as unknown as { __TOUCAN_VT_ANCHOR__: number }).__TOUCAN_VT_ANCHOR__ =
-        performance.now();
+      (
+        window as unknown as { __TOUCAN_VT_ANCHOR__: number }
+      ).__TOUCAN_VT_ANCHOR__ = performance.now();
     });
 
     // Frame i sits at t=i*1000/fps. Advance the virtual clock by integer deltas
@@ -550,27 +555,24 @@ async function captureVt(
       // animations (just created by the page's schedule) start at THIS frame's
       // time; running ones get their anchor-relative start snapped to the 0.1ms
       // grid. Both kill the per-run quantization phase.
-      await page.evaluate(
-        (rel) => {
-          const A = (window as unknown as { __TOUCAN_VT_ANCHOR__: number })
-            .__TOUCAN_VT_ANCHOR__;
-          for (const a of document.getAnimations()) {
-            try {
-              const st = a.startTime;
-              if (st === null || st === undefined) {
-                a.startTime = A + rel;
-              } else if (typeof st === "number") {
-                const r = st - A;
-                const snapped = Math.round(r * 10) / 10;
-                if (snapped !== r) a.startTime = A + snapped;
-              }
-            } catch {
-              /* a finished/detached animation — ignore */
+      await page.evaluate((rel) => {
+        const A = (window as unknown as { __TOUCAN_VT_ANCHOR__: number })
+          .__TOUCAN_VT_ANCHOR__;
+        for (const a of document.getAnimations()) {
+          try {
+            const st = a.startTime;
+            if (st === null || st === undefined) {
+              a.startTime = A + rel;
+            } else if (typeof st === "number") {
+              const r = st - A;
+              const snapped = Math.round(r * 10) / 10;
+              if (snapped !== r) a.startTime = A + snapped;
             }
+          } catch {
+            /* a finished/detached animation — ignore */
           }
-        },
-        target + KEEP_OFFSET,
-      );
+        }
+      }, target + KEEP_OFFSET);
       // Produce the frame in two phases. TICK frames (screenshots discarded)
       // run until the page confirms a requestAnimationFrame fired — proof the
       // main-thread animation tick, style/layout, and commit ran for this
