@@ -31,7 +31,7 @@ There is **no capture contract here** — animate the best way the browser allow
 - **Autoplay, zero interaction.** It runs start to finish on its own the moment it loads. Kick the timeline off on `DOMContentLoaded` (or after `document.fonts.ready` with a 500ms fallback so fonts don't block it).
 - **One self-contained HTML file.** Inline all CSS and JS. A Google Fonts `<link>` is fine; no other external resources, no external JS.
 - **The stage is 16:9, designed at 1920×1080.** `html,body{margin:0;overflow:hidden;background:#0B0F17}`. Everything lives inside one `#stage` that fills the viewport and letterboxes if needed. No host chrome, ever — if a browser appears on screen it's a stylized mock you draw as content, not the real thing.
-- **Target length 18–24s, 4–6 scenes.** Tighter is better — a crisp 20s tour beats a baggy 35s one. Scenes 3–5s; transitions 0.4–0.7s.
+- **Target length ~20–30s, 4–6 scenes.** The in-scene focal camera (§4) adds deliberate reading time — that's comprehension, not bloat — so a per-action-framed tour lands longer than a static one. Still, tighter is better: don't pad dead air. Scenes 4–7s; transitions 0.4–0.7s.
 - **Determinism is not required right now.** You may use `requestAnimationFrame`, real time, and timers freely. (Still avoid `Math.random()` for anything structural — a repeatable look is nicer to iterate on.)
 
 ---
@@ -85,29 +85,36 @@ At any instant, essentially one stage is alive and owns the frame. This is what 
 
 Do NOT lay scenes out statically and toggle visibility — that's a dead, flat video. Use a real camera.
 
-- **Virtual camera** = a single `#world` wrapper holding everything; animate its `transform: translate() scale()` (with `transform-origin` at the point of interest), e.g. a `transition: transform .6s cubic-bezier(.16,1,.3,1)` on `#world` and change the transform on schedule. Moving the camera = transforming `#world`; nothing else moves.
+- **Virtual camera** = a single `#world` wrapper holding everything; animate its `transform: translate() scale()`, e.g. a `transition: transform .6s cubic-bezier(.16,1,.3,1)` on `#world` and change the transform on schedule. Moving the camera = transforming `#world`; nothing else moves. Two helpers carry all the motion:
+  - **`setCamera(px, py, s, blur)`** frames world-point `(px,py)` at the screen center at scale `s`: `translate(960 - px*s, 540 - py*s) scale(s)` + `filter: blur()`. **Set `#world { transform-origin: 0 0 }`** — with the default center origin this translate math is wrong for any off-center target at `s≠1` (it lands ~`960*(1-s)`px off), which is exactly what makes "the cursor clicks the wrong spot." Origin `0 0` makes the centering exact.
+  - **`centerOf(el)`** returns an element's center in that same world space, measured live from `getBoundingClientRect()` (subtract `#world`'s rect, divide out its current on-screen scale). Every camera target and cursor target comes from `centerOf(realElement)` — **never hardcoded coordinates.**
 
 - **One motion vocabulary — define it once, reuse it everywhere,** so it reads as a system, not a pile of effects:
   - **ENTER** = rise + fade (translateY ~24px→0, opacity 0→1), weighted ease-out (`cubic-bezier(0.16,1,0.3,1)`), ~0.4–0.6s. Nothing ever hard-pops.
   - **EXIT** = fade + slight recede (opacity→0, scale ~0.98, or collapse toward parent), ~0.3–0.5s. Everything that entered has a matching exit.
   - **TRAVEL (scene→scene)** = a fast 0.4–0.7s zoom-through with motion blur, landing sharp on the next card. Not a crossfade.
 
-- **Rhythm — hold, act, settle.** Give every meaningful action room: **hold** (~0.3–0.5s: camera arrives and frames the target, nothing happens yet — this anticipation makes the action feel deliberate) → **act** (the click / keystroke / value change) → **settle** (~0.3s held sharp frame before moving on). This rhythm lands the tour at ~18–24s and feels directed. No dead air, but never rush an action.
+- **In-scene focal camera — THE most important rule (this is "you instantly know what's going on").** The camera does not sit still at 1× watching a whole scene. **Before every single action inside a scene, push the camera to frame that exact element**, then do the action, then move to the next target. Click Sign in → the camera is already pushed onto the Sign-in button. Type email → the camera is on the email field. Place order → the camera is on the button. Concretely, for each beat: `pushTo(targetEl, ~2.0)` → wait for it to arrive → cursor/typing/click → hold → `pushTo(nextTarget, …)`. Zoom levels: **~1.8–2.2×** for a single control (button, field), **~1.5–1.7×** for a wider group (a stat row, a table, a drawer). This also fixes readability for free — form fields that are tiny at 1× become legible when framed.
+  - **Keep the card covering the frame.** When you push onto an element near the card's edge, **clamp the focal point** so the camera can't pan past the card and reveal empty stage: clamp `px` to `[960/s + cardLeft, cardRight − 960/s]` and `py` likewise. The target ends up near a frame edge but still in view, with no dead space.
 
-- **Frame the action** (Apple-keynote rule). Before any meaningful beat, the camera pushes in so the target fills ~50–70% of frame width and stays **centered** — don't let it slide off an edge.
+- **Camera arrives before the cursor; holds after the result.** The eye must be on the target *before* the action, and linger a beat *after* so the change registers — this is reading time, not decoration. Order per beat: push camera (~0.6s) → small hold → cursor travels in (~0.5s) → act → **hold ~0.3–0.6s on the result** → next. Between framed sub-steps the whole tour runs ~20–30s; that length is comprehension, not bloat.
+
+- **Frame the EFFECT, not just the action.** When a click changes something *elsewhere* — a cart badge ticks, a drawer slides in, stats count up, a success check appears — **move the camera to the thing that changed** and trigger the change as it arrives. Cause and effect in the same frame is what makes the link instant. (Push to the cart badge, *then* tick it 0→1; don't tick it while the camera is still wide on the button.)
 
 - **Focal discipline — push in AND suppress the periphery.** Focus comes FIRST from the camera (push in), and SECOND from actively pushing everything non-focal back: lower its opacity and add a soft `filter: blur()` (0 on the focused area), maybe a hair of scale-down. It is not just "zoom in a bit" — the focal element should clearly **own the frame** while the rest falls away.
   - **Suppression ≠ deletion.** You dim and blur the surrounding *built* scene; you don't delete it and you don't reduce the frame to one element floating in empty black. The failure to avoid is a **sparse active scene** (§5), not an aggressively focused one. Aggressive focus on a dense scene is exactly right.
 
 - **Depth on the focal element.** The thing in focus gets a subtle lift — scale ~1.03–1.06 and one soft shadow — while the background dims a notch. Cheap, and it's most of the "premium" read.
 
-- **Motion blur, honestly.** `filter: blur()` on `#world` during a fast camera travel (a short blur pulse that ramps to **exactly 0** on arrival). A held/settled frame that's blurry is a bug.
+- **Motion blur — anti-strobe, not "cinematic."** Its real job is to stop fast camera moves from stuttering so the eye glides through them. Apply a small `filter: blur()` on `#world` **scaled to how far/fast the camera travels** (a big scene→scene jump gets more than a small field→field hop), ramping **0 → N → exactly 0** as the move settles. Keep it subtle: **if you notice it as blur, it's too strong** (cap it low, ~a few px). A held/settled frame that's blurry is a bug.
 
 - **Easing: weighted, never linear.** Faster-in/slower-out for pushes; a soft settle (`cubic-bezier(0.16,1,0.3,1)`) for arrivals. A touch of anticipation (a small back-move before a travel) and overshoot/settle where it fits. Linear is banned except a continuous loop (a spinner).
 
 - **Cursor — target the real element** (when a scene needs one). A real pointer that MOVES to a control the user can see and clicks it. Keep the cursor INSIDE `#world` so the camera carries it. **Target its position from the real element's geometry, not hardcoded pixels** — e.g. read the element's `offsetLeft/offsetTop` within `#world` (or its `getBoundingClientRect` mapped into `#world`'s space by subtracting `#world`'s rect and dividing out the current camera scale), then move the cursor there with a weighted transition. Guard the lookup: if the element is missing, don't move (never feed `undefined` into a transform).
 
 - **Cursor timing.** The camera frames the target FIRST (push-in + hold); only THEN does the cursor travel in — weighted ease-in/out with a touch of anticipation and a settle, never a linear glide. It arrives, holds a beat, then clicks. Type into fields character-by-character with a blinking caret.
+
+- **Counter-scale the cursor (and click ripple) when zoomed.** The cursor lives inside `#world`, so a 2× camera push would render a 30px pointer at 60px. Multiply the cursor's transform by `1/cameraScale` (with `transform-origin` at its tip) so it stays a constant on-screen size; do the same for the click ripple. Without this the pointer balloons and covers what it's clicking.
 
 - **Click feedback — a click must visibly land.** On the click, emit a **ripple/pulse** at the contact point AND make the **target react**: a brief pressed state (scale ~0.97 + a momentary accent/brightness shift, then release). A cursor pulsing over an element that doesn't react reads as broken.
 
@@ -164,7 +171,9 @@ Priority #1 — guided tour, not a diagram:
 - [ ] The Overview builds node by node (each spawns out of the previous); NEVER held as a flat, complete, equal-weight graph.
 - [ ] The camera dives into a node, which OPENS into a full dense scene, plays, then COLLAPSES back before the next spawns out of it. Essentially one stage alive at a time.
 - [ ] Focus = camera push-in + dimmed/blurred periphery + depth on the focal element; the focal element clearly owns the frame.
-- [ ] Single `#world` transform = camera; every action framed by a push-in first, target centered; every scene has the hold → act → settle rhythm.
+- [ ] Single `#world` transform = camera, with `transform-origin: 0 0` so the centering math is exact; the camera NEVER just sits at 1× watching a whole scene.
+- [ ] **In-scene focal camera:** every action is preceded by a push onto that exact element (~1.8–2.2× control, ~1.5–1.7× group); the camera arrives before the cursor and holds after the result; effects (badge/drawer/counter/success) are framed on the thing that CHANGED.
+- [ ] Focal pushes clamp to keep the card covering the frame (no empty stage on edge elements); the cursor + ripple are counter-scaled by 1/scale so they don't balloon when zoomed.
 
 Priority #2 — real, dense scenes:
 - [ ] Every active scene is a densely BUILT card (50–70% filled) — no empty space, no giant faded background words; cursor acts on real elements.
@@ -180,5 +189,4 @@ Priority #3 — polish:
 Priority #4 — it runs:
 - [ ] One self-contained HTML file, inline CSS/JS, Google Fonts link only; 16:9 1920×1080 stage; no host chrome; autoplays on load; zero console errors; guarded lookups.
 - [ ] If the user gave a script, every beat is realized in order; chapter rail named after the beats.
-- [ ] 18–24s, 4–6 scenes, nothing pops in without motion.
-</content>
+- [ ] ~20–30s, 4–6 scenes, nothing pops in without motion.
