@@ -35,12 +35,13 @@ const PROMPT_PATHS: Record<GenEngine, string> = {
 const MOCK_PATHS: Record<GenEngine, string> = {
   seek: fileURLToPath(new URL("../fixtures/reference.html", import.meta.url)),
   vt: fileURLToPath(new URL("../fixtures/css-anim.html", import.meta.url)),
-  // A full guided-tour reference: the diagram/token explainer (DNS) — a non-UI
-  // process, in-scene focal camera, traveling packet, node activation. Proves
-  // the freeform path handles any process, not just UI flows. (A UI-flow
-  // reference lives at fixtures/freeform-ui.html.)
+  // The flagship non-UI reference: "How Taxes Work" — pure illustration (person,
+  // coins that split into tax, a treasury, a hub-and-spoke of SVG-icon services),
+  // NO browser/card/phone. Best proof the freeform path explains any process
+  // without a "website vibe". Other references: freeform-diagram.html (DNS graph
+  // + traveling packet), freeform-ui.html (a UI flow with the focal camera).
   freeform: fileURLToPath(
-    new URL("../fixtures/freeform-diagram.html", import.meta.url),
+    new URL("../fixtures/freeform-taxes.html", import.meta.url),
   ),
 };
 
