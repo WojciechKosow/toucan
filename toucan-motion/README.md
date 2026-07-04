@@ -56,17 +56,22 @@ Requires Node 20+. ffmpeg ships via `ffmpeg-static` — no system ffmpeg needed.
 ## Usage
 
 ```
+toucan-motion generate --plan  --topic "<topic>" [options]          # script only
 toucan-motion generate --topic "<topic>" [--out <file.html>] [options]
 toucan-motion render --topic "<topic>" --out <file.mp4> [options]
 toucan-motion render --html <file.html> --out <file.mp4> [options]
 toucan-motion check  --html <file.html> [--engine seek|vt|freeform]
 
   --topic <text>     Topic to explain (required unless --html).
-  --out <file>       generate: output HTML path (default out/<topic-slug>.html).
+  --plan             generate: run ONLY the screenwriter — draft a beat-by-beat
+                     script from the topic, print it, and stop (no HTML).
+  --out <file>       generate: output HTML path (default out/<topic-slug>.html);
+                     with --plan, also saves the script to this file.
                      render: output MP4 path (required).
   --script <file>    Beat-by-beat brief appended to the topic.
   --html <file>      Capture an existing HTML file; skip generation (no API key needed).
-  --mock             Use the engine's reference fixture instead of the API (no key, no spend).
+  --mock             Use the engine's reference fixture instead of the API (no key,
+                     no spend); with generate --plan, returns the example script.
   --engine <name>    render: seek (default) | vt (natural CSS animation on a virtual clock).
                      check: also freeform (self-containment + headless smoke test).
   --provider <name>  openai | anthropic (default: openai, or whichever key is set).
@@ -78,7 +83,25 @@ toucan-motion check  --html <file.html> [--engine seek|vt|freeform]
 
 ### Examples
 
-Generate the animation HTML itself (the current quality path — open the file in
+Recommended two-step flow — write the script first, approve it, then animate.
+Locking the plan lets the model spend its whole budget on craft, and gives you a
+checkpoint to fix the story before any pixels are drawn:
+
+```bash
+# 1) Screenwriter drafts a beat-by-beat script from the topic (script only, no HTML):
+toucan-motion generate --plan --topic "how a login works" --provider anthropic > beats.txt
+# 2) Read/tweak beats.txt to taste, then hand it to the animator:
+toucan-motion generate --topic "how a login works" --script beats.txt --provider anthropic
+```
+
+`--plan` runs only the "screenwriter" prompt (`prompts/system-script.md`), prints
+the script to **stdout** (all status goes to stderr, so `> beats.txt` is clean),
+and exits. It's principles-based: a tight ~20–30s, 4–6-beat script in the same
+bracketed-beat format the animator already understands, describing what each beat
+_shows_ — never HTML or colors. `--plan --mock` prints the example script with no
+API key.
+
+Generate the animation HTML in one shot (skips the checkpoint — open the file in
 a browser to watch it; needs an API key unless `--mock`):
 
 ```bash
@@ -126,6 +149,11 @@ npm run dev -- render --html fixtures/reference.html --out out/ref.mp4
 
 ## How it works
 
+0. **plan / screenwriter** (`src/generate.ts`) — `generateScript({topic, …})`,
+   reached via `generate --plan`. Sends `prompts/system-script.md` + your topic to
+   the model and returns a beat-by-beat script (plain text). This is step (a) of
+   the two-step flow: a locked, human-approved plan the animator then realizes.
+   `--plan` prints it to stdout and exits — it does **not** touch the animator.
 1. **generate** (`src/generate.ts`) — `generateHtml({topic, …, engine, mock})`.
    With `--mock` it returns the engine's reference fixture verbatim (no API
    key); otherwise it sends the engine's prompt (`prompts/system.md` for seek,

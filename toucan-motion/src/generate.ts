@@ -32,6 +32,17 @@ const PROMPT_PATHS: Record<GenEngine, string> = {
     new URL("../prompts/system-freeform.md", import.meta.url),
   ),
 };
+// The screenwriter ("director") prompt: topic -> a beat-by-beat script, run on
+// its own via `generate --plan` so a human can approve/tweak before the animator
+// spends its whole budget realizing it.
+const SCRIPT_PROMPT_PATH = fileURLToPath(
+  new URL("../prompts/system-script.md", import.meta.url),
+);
+// `--plan --mock` returns this canonical example script verbatim (no API key) —
+// it's the exact bracketed-beat format the animator consumes.
+const SCRIPT_MOCK_PATH = fileURLToPath(
+  new URL("../examples/login-flow.txt", import.meta.url),
+);
 const MOCK_PATHS: Record<GenEngine, string> = {
   seek: fileURLToPath(new URL("../fixtures/reference.html", import.meta.url)),
   vt: fileURLToPath(new URL("../fixtures/css-anim.html", import.meta.url)),
@@ -58,6 +69,16 @@ export interface GenerateOptions {
    *  exercises the whole topic->MP4 path with no API key / no spend. */
   mock?: boolean;
   /** Override the system prompt file (defaults to the engine's prompt). */
+  promptPath?: string;
+}
+
+export interface ScriptOptions {
+  topic: string;
+  provider?: Provider;
+  model?: string;
+  /** mock=true returns the canonical example script verbatim (no API key). */
+  mock?: boolean;
+  /** Override the screenwriter prompt (defaults to prompts/system-script.md). */
   promptPath?: string;
 }
 
@@ -179,6 +200,27 @@ export async function generateHtml(opts: GenerateOptions): Promise<string> {
   const userText = opts.script ? `${opts.topic}\n\n${opts.script}` : opts.topic;
   const raw = await callModel(provider, model, system, userText);
   return finalize(raw, "Generated output");
+}
+
+/**
+ * topic -> a beat-by-beat script (plain text), via the screenwriter prompt.
+ * This is step (a) of the two-step flow: draft a locked plan the user approves
+ * (or tweaks) before it's fed to the animator through `generate --script`.
+ * - mock: returns the canonical example script verbatim (no API key, no spend).
+ */
+export async function generateScript(opts: ScriptOptions): Promise<string> {
+  if (opts.mock) {
+    return (await readFile(SCRIPT_MOCK_PATH, "utf8")).trim();
+  }
+  const provider = resolveProvider(opts.provider);
+  const model = opts.model ?? DEFAULT_MODELS[provider];
+  const system = await readFile(opts.promptPath ?? SCRIPT_PROMPT_PATH, "utf8");
+  const raw = await callModel(provider, model, system, opts.topic);
+  const script = stripFences(raw);
+  if (!script.trim()) {
+    throw new GenerationError("Generated script was empty.", raw);
+  }
+  return script;
 }
 
 const REPAIR_CONTRACT: Record<GenEngine, string> = {

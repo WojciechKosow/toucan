@@ -7,6 +7,11 @@
 //     self-containment check + a headless-Chromium smoke test (zero uncaught
 //     errors, real DOM, visible motion), with one auto-repair pass on failure.
 //
+//   toucan-motion generate --plan --topic "how a shopping site works"
+//     Step (a) of the two-step flow: run ONLY the screenwriter and stop. The
+//     topic -> a beat-by-beat script (prompts/system-script.md), printed to
+//     stdout for you to approve/tweak, then fed back via --script to animate.
+//
 //   toucan-motion render --topic "how a shopping site works" --out out/shop.mp4
 //     [--script path.txt]   beat-by-beat brief appended to the topic
 //     [--html path.html]    skip generation, capture an existing file (dev loop)
@@ -39,6 +44,7 @@ import {
   type GenEngine,
   type Provider,
   generateHtml,
+  generateScript,
   repair,
   resolveProvider,
 } from "./generate.js";
@@ -58,6 +64,7 @@ interface Flags {
   out?: string;
   fps?: number;
   mock: boolean;
+  plan: boolean;
   keepFrames: boolean;
   keepHtml: boolean;
 }
@@ -74,6 +81,7 @@ const VALUE_FLAGS: Record<string, keyof Flags> = {
 };
 const BOOL_FLAGS: Record<string, keyof Flags> = {
   "--mock": "mock",
+  "--plan": "plan",
   "--keep-frames": "keepFrames",
   "--keep-html": "keepHtml",
 };
@@ -88,14 +96,25 @@ Usage:
 
 generate — topic -> ANIMATION HTML (the current product; open it in a browser):
   --topic <text>     Topic to explain (required).
-  --out <file.html>  Output HTML path (default: out/<topic-slug>.html).
+  --plan             Run ONLY the screenwriter: draft a beat-by-beat script from
+                     the topic, print it, and stop (no HTML). Review/tweak it,
+                     then rerun generate with --script <file> to animate it.
+  --out <file>       generate: output HTML path (default: out/<topic-slug>.html).
+                     generate --plan: also save the script to this file.
   --script <file>    Beat-by-beat brief appended to the topic.
-  --mock             Use the reference fixture instead of the API (no key, no spend).
+  --mock             Use the reference fixture (or, with --plan, the example
+                     script) instead of the API (no key, no spend).
   --provider <name>  openai | anthropic (default: openai, or whichever key is set).
   --model <id>       Model id (default: ${DEFAULT_MODELS.openai} for openai, ${DEFAULT_MODELS.anthropic} for anthropic).
   Uses the freeform engine: natural CSS/JS animation, autoplay, NO capture
   contract. Gated by a self-containment check + a headless smoke test (zero
   uncaught errors, real DOM, visible motion); one auto-repair pass on failure.
+
+  Recommended two-step flow (a locked plan lets the model spend its whole budget
+  on craft, and gives you an approval checkpoint):
+    node dist/cli.js generate --plan --topic "how a login works" > beats.txt
+    # edit beats.txt to taste, then:
+    node dist/cli.js generate --topic "how a login works" --script beats.txt
 
 render — topic/HTML -> MP4 (capture engines only):
   --topic <text>     Topic to explain (required unless --html).
@@ -117,6 +136,8 @@ check:
                      freeform: self-containment + headless smoke test.
 
 Examples:
+  toucan-motion generate --plan --topic "how a shopping site works" > beats.txt
+  toucan-motion generate --topic "how a shopping site works" --script beats.txt
   toucan-motion generate --topic "how a shopping site works" --out out/shop.html
   toucan-motion generate --topic "how a shopping site works" --mock
   toucan-motion render --topic "how a shopping site works" --mock --out out/mock.mp4
@@ -125,7 +146,12 @@ Examples:
   toucan-motion check  --html out/shop.html --engine freeform`;
 
 function parseFlags(args: string[]): Flags {
-  const flags: Flags = { mock: false, keepFrames: false, keepHtml: false };
+  const flags: Flags = {
+    mock: false,
+    plan: false,
+    keepFrames: false,
+    keepHtml: false,
+  };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a in VALUE_FLAGS) {
@@ -248,9 +274,53 @@ async function freeformGate(htmlPath: string): Promise<ValidationResult> {
   };
 }
 
+/** generate --plan — step (a) of the two-step flow: run ONLY the screenwriter
+ *  and stop. The topic goes to the "director" prompt; the beat-by-beat script it
+ *  drafts is printed to stdout (all status on stderr, so stdout is a clean,
+ *  redirectable script). The human reviews/tweaks it, then feeds it back with
+ *  `generate --topic "…" --script <file>` to make the animation. */
+async function planCmd(flags: Flags): Promise<void> {
+  if (!flags.topic) fail("generate --plan requires --topic");
+  if (flags.html) fail("--html does not apply to generate --plan");
+  if (flags.provider && !PROVIDERS.includes(flags.provider as Provider))
+    fail(`--provider must be one of: ${PROVIDERS.join(", ")}`);
+  const provider = resolveProvider(flags.provider);
+  const model = flags.model ?? DEFAULT_MODELS[provider];
+  const src = flags.mock ? "mock (example script)" : `${provider}/${model}`;
+  // Status -> stderr; the script itself is the only thing on stdout.
+  console.error(
+    `drafting a beat-by-beat script for "${flags.topic}" (${src})…`,
+  );
+
+  let script: string;
+  try {
+    script = await generateScript({
+      topic: flags.topic,
+      provider,
+      model: flags.model,
+      mock: flags.mock,
+    });
+  } catch (err) {
+    if (err instanceof GenerationError) die(err.message);
+    throw err;
+  }
+
+  process.stdout.write(script.endsWith("\n") ? script : `${script}\n`);
+  if (flags.out) {
+    await mkdir(dirname(flags.out), { recursive: true });
+    await writeFile(flags.out, `${script}\n`, "utf8");
+    console.error(`\nsaved to ${flags.out}`);
+  }
+  console.error(
+    `\nreview/tweak the script above, then make the animation:\n` +
+      `  node dist/cli.js generate --topic ${JSON.stringify(flags.topic)} --script <file> --provider ${provider}`,
+  );
+}
+
 /** generate — topic -> animation HTML (freeform engine, no capture contract).
  *  The HTML file is the deliverable and is ALWAYS kept, pass or fail. */
 async function generateCmd(flags: Flags): Promise<void> {
+  if (flags.plan) return planCmd(flags);
   if (!flags.topic) fail("generate requires --topic");
   if (flags.html)
     fail("generate writes HTML; --html only applies to render/check");
