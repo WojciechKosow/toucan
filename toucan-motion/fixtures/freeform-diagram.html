@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>How DNS Finds a Website</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0B0F17; --surface:#111722; --surface2:#161E2B; --border:#232C3B;
+  --text:#E8ECF4; --muted:#8792A6; --accent:#3DDC97;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;width:100%;height:100%;background:var(--bg);overflow:hidden;font-family:'Inter',sans-serif;}
+#stageOuter{position:fixed;inset:0;background:var(--bg);overflow:hidden;}
+#stage{position:absolute;left:50%;top:50%;width:1920px;height:1080px;transform:translate(-50%,-50%);overflow:hidden;background:var(--bg);}
+.bg-grid{position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.055) 1.4px,transparent 1.4px);background-size:44px 44px;opacity:.7;pointer-events:none;}
+
+/* camera: origin 0,0 is REQUIRED — setCamera's translate math assumes it */
+#world{position:absolute;inset:0;width:1920px;height:1080px;will-change:transform,filter;
+  transform-origin:0 0; transform:translate(0,0) scale(1); filter:blur(0px);
+  transition:transform .6s cubic-bezier(.16,1,.3,1), filter .4s ease-out;}
+
+/* frame chrome (fixed) */
+.scrim{position:absolute;top:0;left:0;width:920px;height:300px;
+  background:linear-gradient(135deg,rgba(11,15,23,.92),rgba(11,15,23,0) 70%);pointer-events:none;z-index:20;}
+#captionWrap{position:absolute;left:64px;top:56px;z-index:21;transition:opacity .22s ease,transform .22s ease;}
+#captionWrap.swap{opacity:0;transform:translateY(-10px);}
+#capEyebrow{font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:15px;letter-spacing:.12em;margin-bottom:12px;text-transform:uppercase;}
+#capTitle{font-size:42px;font-weight:800;color:var(--text);max-width:680px;line-height:1.15;letter-spacing:-.01em;}
+.chapter-rail{position:absolute;left:50%;bottom:38px;transform:translateX(-50%);display:flex;gap:14px;align-items:center;
+  font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--muted);letter-spacing:.03em;z-index:21;}
+.rail-item{opacity:.5;transition:color .3s ease,opacity .3s ease;}
+.rail-item.active{color:var(--accent);opacity:1;font-weight:700;}
+.rail-sep{opacity:.3;}
+
+/* diagram node */
+.dnode{position:absolute;width:230px;height:120px;border-radius:16px;background:var(--surface2);
+  border:1px solid var(--border);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  opacity:0;transform:translateY(22px) scale(.96);
+  transition:opacity .5s cubic-bezier(.16,1,.3,1),transform .5s cubic-bezier(.16,1,.3,1),
+    box-shadow .4s ease,border-color .4s ease,filter .4s ease;}
+.dnode.in{opacity:1;transform:translateY(0) scale(1);}
+.dnode.dim{opacity:.42;filter:blur(1.5px);}
+.dnode.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(61,220,151,.35),0 24px 50px rgba(0,0,0,.5);
+  filter:none;opacity:1;}
+.dnode.done{border-color:rgba(61,220,151,.5);}
+.dn-ico{font-size:26px;line-height:1;}
+.dn-num{font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:12px;letter-spacing:.08em;}
+.dn-label{font-size:18px;font-weight:700;color:var(--text);}
+.dn-sub{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);}
+
+/* directed edge (rotated line + draw fill) */
+.edge{position:absolute;height:3px;background:var(--border);transform-origin:0 50%;border-radius:2px;overflow:hidden;}
+.edge span{position:absolute;inset:0;background:var(--accent);transform:scaleX(0);transform-origin:left;
+  transition:transform .55s cubic-bezier(.16,1,.3,1);}
+.edge.lit span{transform:scaleX(1);}
+
+/* the query packet (the "actor" — a traveling token) */
+.packet{position:absolute;left:0;top:0;z-index:60;opacity:0;transform:translate(0,0);
+  transition:transform .6s cubic-bezier(.34,1.2,.5,1),opacity .3s ease;pointer-events:none;}
+.packet .chip{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);white-space:nowrap;
+  background:var(--accent);color:#08150f;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;
+  padding:5px 11px;border-radius:8px;box-shadow:0 10px 24px rgba(0,0,0,.5);}
+.packet .chip::after{content:'';position:absolute;left:50%;bottom:-5px;transform:translateX(-50%) rotate(45deg);
+  width:9px;height:9px;background:var(--accent);}
+.packet .core{position:absolute;left:-9px;top:-9px;width:18px;height:18px;border-radius:50%;background:var(--accent);
+  box-shadow:0 0 0 5px rgba(61,220,151,.22),0 0 22px rgba(61,220,151,.7);}
+
+/* response label under a node */
+.resp{position:absolute;z-index:40;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);
+  background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:7px 12px;white-space:nowrap;
+  opacity:0;transform:translate(-50%,6px);transition:opacity .35s ease,transform .35s ease;}
+.resp.show{opacity:1;transform:translate(-50%,0);}
+.resp b{color:var(--accent);font-weight:700;}
+</style>
+</head>
+<body>
+<div id="stageOuter"><div id="stage">
+  <div class="bg-grid"></div>
+  <div id="world">
+    <div class="diagram" id="diagram">
+      <!-- nodes: You -> Resolver -> {Root, .dev TLD, Authoritative} (hub) -->
+      <div class="dnode" id="n1" style="left:245px;top:480px;">
+        <div class="dn-ico">🖥️</div><div class="dn-num">01</div><div class="dn-label">Your Browser</div><div class="dn-sub">wants toucan.dev</div>
+      </div>
+      <div class="dnode" id="n2" style="left:665px;top:480px;">
+        <div class="dn-ico">🔁</div><div class="dn-num">02</div><div class="dn-label">Resolver</div><div class="dn-sub">recursive DNS</div>
+      </div>
+      <div class="dnode" id="n3" style="left:1175px;top:270px;">
+        <div class="dn-ico">🌐</div><div class="dn-num">03</div><div class="dn-label">Root Server</div><div class="dn-sub">the . zone</div>
+      </div>
+      <div class="dnode" id="n4" style="left:1175px;top:480px;">
+        <div class="dn-ico">🏷️</div><div class="dn-num">04</div><div class="dn-label">.dev TLD</div><div class="dn-sub">top-level domain</div>
+      </div>
+      <div class="dnode" id="n5" style="left:1175px;top:690px;">
+        <div class="dn-ico">📇</div><div class="dn-num">05</div><div class="dn-label">Authoritative</div><div class="dn-sub">ns1.toucan.dev</div>
+      </div>
+
+      <div class="edge" id="e12"></div>
+      <div class="edge" id="e23"></div>
+      <div class="edge" id="e24"></div>
+      <div class="edge" id="e25"></div>
+
+      <div class="resp" id="r2">cache miss — <b>let me ask around</b></div>
+      <div class="resp" id="r3">try the <b>.dev</b> TLD →</div>
+      <div class="resp" id="r4">ask <b>ns1.toucan.dev</b> →</div>
+      <div class="resp" id="r5"><b>93.184.216.34</b></div>
+      <div class="resp" id="r1">got it — <b>connecting… 200 OK ✓</b></div>
+
+      <div class="packet" id="pkt"><div class="core"></div><div class="chip" id="pktChip">A? toucan.dev</div></div>
+    </div>
+  </div>
+
+  <div class="scrim"></div>
+  <div id="captionWrap"><div id="capEyebrow">SYSTEM FLOW</div><div id="capTitle">How DNS Finds a Website</div></div>
+  <div class="chapter-rail" id="rail">
+    <span class="rail-item active" data-idx="0">Overview</span><span class="rail-sep">/</span>
+    <span class="rail-item" data-idx="1">The Question</span><span class="rail-sep">/</span>
+    <span class="rail-item" data-idx="2">The Hunt</span><span class="rail-sep">/</span>
+    <span class="rail-item" data-idx="3">The Answer</span><span class="rail-sep">/</span>
+    <span class="rail-item" data-idx="4">Connected</span>
+  </div>
+</div></div>
+
+<script>
+(function(){
+  "use strict";
+  function $(id){ return document.getElementById(id); }
+  function addClass(el,c){ if(el) el.classList.add(c); }
+  function removeClass(el,c){ if(el) el.classList.remove(c); }
+  function wait(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+
+  // Fixed node centres in world design space (matches the CSS left/top + 230x120).
+  var N = {
+    n1:{x:360,y:540}, n2:{x:780,y:540},
+    n3:{x:1290,y:330}, n4:{x:1290,y:540}, n5:{x:1290,y:750}
+  };
+  // The diagram's bounding box — the focal clamp keeps pushes inside it. A diagram
+  // is naturally inset (grid shows around it); we clamp so the camera never flies
+  // off it, but we don't force full-bleed coverage the way a UI card does.
+  var SCENE = { x:230, y:250, w:1300, h:600 };
+
+  var cam = { x:960, y:540, s:1 };
+  function setCamera(px,py,s,blur){
+    var w=$('world'); if(!w) return;
+    s=(typeof s==='number')?s:1; cam.x=px; cam.y=py; cam.s=s;
+    w.style.transform='translate('+(960-px*s)+'px,'+(540-py*s)+'px) scale('+s+')';
+    w.style.filter='blur('+(blur||0)+'px)';
+  }
+  function centerOf(el){
+    var w=$('world'); if(!el||!w) return {x:960,y:540};
+    var er,wr; try{ er=el.getBoundingClientRect(); wr=w.getBoundingClientRect(); }catch(e){ return {x:960,y:540}; }
+    var sx=wr.width/1920||1, sy=wr.height/1080||1;
+    var x=(er.left+er.width/2-wr.left)/sx, y=(er.top+er.height/2-wr.top)/sy;
+    if(isNaN(x)||isNaN(y)) return {x:960,y:540};
+    return {x:x,y:y};
+  }
+  // Focal push to a point (px,py) — clamped to the diagram box, blur scaled to move distance.
+  function pushXY(px,py,s){
+    s=s||1.45;
+    var minPx=960/s+SCENE.x, maxPx=(SCENE.x+SCENE.w)-960/s;
+    var minPy=540/s+SCENE.y, maxPy=(SCENE.y+SCENE.h)-540/s;
+    if(minPx<=maxPx) px=Math.min(maxPx,Math.max(minPx,px));
+    if(minPy<=maxPy) py=Math.min(maxPy,Math.max(minPy,py));
+    var dx=px*s-cam.x*cam.s, dy=py*s-cam.y*cam.s, dist=Math.sqrt(dx*dx+dy*dy);
+    var blur=Math.max(0,Math.min(5,dist/460));
+    setCamera(px,py,s,blur);
+    if(blur>0.2) setTimeout(function(){ setCamera(px,py,s,0); },300);
+  }
+  function pushNode(id,s){ var c=N[id]; if(c) pushXY(c.x,c.y,s); }
+  function pullBack(blur){ setCamera(960,540,1,blur||0); }
+
+  // Draw a directed edge div between two node centres (rotated line + scaleX fill).
+  function layEdge(id,fromId,toId){
+    var e=$(id); if(!e) return; var a=N[fromId], b=N[toId]; if(!a||!b) return;
+    var dx=b.x-a.x, dy=b.y-a.y, len=Math.sqrt(dx*dx+dy*dy), ang=Math.atan2(dy,dx)*180/Math.PI;
+    e.style.left=a.x+'px'; e.style.top=(a.y-1.5)+'px'; e.style.width=len+'px';
+    e.style.transform='rotate('+ang+'deg)';
+  }
+  // Move the packet so its core sits at a node centre (core is at the packet's 0,0).
+  function packetTo(id,dur){
+    var p=$('pkt'), c=N[id]; if(!p||!c) return;
+    p.style.transition='transform '+((dur||600)/1000)+'s cubic-bezier(.34,1.2,.5,1),opacity .3s ease';
+    p.style.transform='translate('+c.x+'px,'+c.y+'px)';
+  }
+  function setChip(t){ var c=$('pktChip'); if(c) c.textContent=t; }
+  // Place a response label centred under a node.
+  function showResp(id,nodeId,dy){
+    var r=$(id), c=N[nodeId]; if(!r||!c) return;
+    r.style.left=c.x+'px'; r.style.top=(c.y+(dy||78))+'px'; addClass(r,'show');
+  }
+  function dimExcept(activeId){
+    ['n1','n2','n3','n4','n5'].forEach(function(id){
+      var el=$(id); if(!el) return;
+      if(id===activeId){ removeClass(el,'dim'); } else if(!el.classList.contains('active')){ addClass(el,'dim'); }
+    });
+  }
+  function activate(id){ var el=$(id); if(el){ removeClass(el,'dim'); addClass(el,'active'); } }
+  function setCaption(eb,tt){ var w=$('captionWrap'); if(!w) return; addClass(w,'swap');
+    setTimeout(function(){ if($('capEyebrow'))$('capEyebrow').textContent=eb; if($('capTitle'))$('capTitle').textContent=tt; removeClass(w,'swap'); },220); }
+  function setRail(i){ var it=document.querySelectorAll('.rail-item'); for(var k=0;k<it.length;k++){
+    if(parseInt(it[k].getAttribute('data-idx'),10)===i) addClass(it[k],'active'); else removeClass(it[k],'active'); } }
+
+  var CAM=600;
+
+  async function buildOverview(){
+    ['e12','e23','e24','e25'].forEach(function(e){
+      layEdge(e, e==='e12'?'n1':'n2', e==='e12'?'n2':(e==='e23'?'n3':(e==='e24'?'n4':'n5')));
+    });
+    await wait(350);
+    addClass($('n1'),'in'); pushNode('n1',1.15); await wait(650);
+    addClass($('e12'),'lit'); await wait(280);
+    addClass($('n2'),'in'); pushNode('n2',1.15); await wait(650);
+    addClass($('e23'),'lit'); addClass($('e24'),'lit'); addClass($('e25'),'lit'); await wait(200);
+    addClass($('n3'),'in'); await wait(230);
+    addClass($('n4'),'in'); await wait(230);
+    addClass($('n5'),'in'); await wait(400);
+    pullBack(0); await wait(650);
+  }
+
+  async function playLookup(){
+    // 1) The question — frame You, the query is born.
+    setCaption('STEP 01','The Question'); setRail(1);
+    dimExcept('n1'); pushNode('n1',1.7); await wait(CAM);
+    var p=$('pkt'); if(p){ p.style.transform='translate('+N.n1.x+'px,'+N.n1.y+'px)'; p.style.opacity='1'; }
+    activate('n1'); await wait(700);
+
+    // 2) The hunt — packet hops You->Resolver, then Resolver queries Root, TLD, Auth.
+    setCaption('STEP 02','The Hunt'); setRail(2);
+    dimExcept('n2'); pushNode('n2',1.55); await wait(CAM);
+    packetTo('n2',650); await wait(700); activate('n2'); showResp('r2','n2'); await wait(750);
+
+    // frame the right cluster (Resolver + Root/TLD/Auth) so all three targets are in view
+    removeClass($('r2'),'show');
+    pushXY(1150,540,1.35); await wait(CAM);
+    dimExcept('n3'); setChip('.dev ?'); packetTo('n3',600); await wait(650); activate('n3'); showResp('r3','n3',-96); await wait(750);
+    removeClass($('r3'),'show'); dimExcept('n4'); setChip('toucan.dev ?'); packetTo('n2',450); await wait(200); packetTo('n4',600);
+    await wait(650); activate('n4'); showResp('r4','n4'); await wait(750);
+    removeClass($('r4'),'show'); dimExcept('n5'); setChip('A record ?'); packetTo('n2',450); await wait(200); packetTo('n5',600);
+    await wait(650); activate('n5'); showResp('r5','n5'); await wait(850);
+
+    // 3) The answer — the IP travels back to You.
+    setCaption('STEP 03','The Answer'); setRail(3);
+    removeClass($('r5'),'show'); setChip('93.184.216.34');
+    ['n1','n2','n3','n4','n5'].forEach(function(id){ removeClass($(id),'dim'); });
+    pullBack(0); await wait(200);
+    packetTo('n2',600); await wait(650); packetTo('n1',700); await wait(750);
+
+    // 4) Connected.
+    setCaption('STEP 04','Connected'); setRail(4);
+    dimExcept('n1'); pushNode('n1',1.7); await wait(CAM);
+    activate('n1'); addClass($('n1'),'done'); showResp('r1','n1'); await wait(1200);
+    pullBack(0); await wait(500);
+  }
+
+  async function run(){
+    try{ await buildOverview(); await playLookup(); }
+    catch(e){ if(window.console&&console.error) console.error(e); }
+  }
+  var started=false;
+  function init(){ if(started) return; started=true; run(); }
+  document.addEventListener('DOMContentLoaded',function(){
+    if(document.fonts&&document.fonts.ready&&document.fonts.ready.then){ document.fonts.ready.then(init).catch(init); }
+    setTimeout(init,500);
+  });
+})();
+</script>
+</body>
+</html>
