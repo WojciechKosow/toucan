@@ -43,6 +43,12 @@ const SCRIPT_PROMPT_PATH = fileURLToPath(
 const SCRIPT_MOCK_PATH = fileURLToPath(
   new URL("../examples/login-flow.txt", import.meta.url),
 );
+// The editor prompt: current HTML + conversation + one change request -> the full
+// file with only that change applied. Step (b) of the session/chat flow — a
+// follow-up EDITS the animation instead of regenerating it from scratch.
+const EDIT_PROMPT_PATH = fileURLToPath(
+  new URL("../prompts/system-edit.md", import.meta.url),
+);
 const MOCK_PATHS: Record<GenEngine, string> = {
   seek: fileURLToPath(new URL("../fixtures/reference.html", import.meta.url)),
   vt: fileURLToPath(new URL("../fixtures/css-anim.html", import.meta.url)),
@@ -79,6 +85,21 @@ export interface ScriptOptions {
   /** mock=true returns the canonical example script verbatim (no API key). */
   mock?: boolean;
   /** Override the screenwriter prompt (defaults to prompts/system-script.md). */
+  promptPath?: string;
+}
+
+export interface EditOptions {
+  /** The animation being revised — a full self-contained HTML document. */
+  currentHtml: string;
+  /** The one new change to apply (the latest user message). */
+  request: string;
+  /** Prior conversation for this animation (older requests still hold). */
+  thread?: string;
+  provider?: Provider;
+  model?: string;
+  /** mock=true returns currentHtml unchanged (an identity edit; no API key). */
+  mock?: boolean;
+  /** Override the editor prompt (defaults to prompts/system-edit.md). */
   promptPath?: string;
 }
 
@@ -221,6 +242,34 @@ export async function generateScript(opts: ScriptOptions): Promise<string> {
     throw new GenerationError("Generated script was empty.", raw);
   }
   return script;
+}
+
+/**
+ * current HTML + thread + one change request -> the full edited HTML.
+ * Step (b) of session/chat: a follow-up EDITS the animation surgically (change
+ * only what's asked; preserve the rest) instead of regenerating from the topic.
+ * - mock: returns currentHtml unchanged (identity edit; no API key, no spend).
+ * Contract validity is checked separately by the freeform gate.
+ */
+export async function editHtml(opts: EditOptions): Promise<string> {
+  if (opts.mock) {
+    return opts.currentHtml;
+  }
+  const provider = resolveProvider(opts.provider);
+  const model = opts.model ?? DEFAULT_MODELS[provider];
+  const system = await readFile(opts.promptPath ?? EDIT_PROMPT_PATH, "utf8");
+  const userText = [
+    ...(opts.thread?.trim()
+      ? ["--- CONVERSATION SO FAR ---", opts.thread.trim(), ""]
+      : []),
+    "--- CURRENT HTML ---",
+    opts.currentHtml,
+    "",
+    "--- CHANGE REQUESTED ---",
+    opts.request,
+  ].join("\n");
+  const raw = await callModel(provider, model, system, userText);
+  return finalize(raw, "Edited output");
 }
 
 const REPAIR_CONTRACT: Record<GenEngine, string> = {

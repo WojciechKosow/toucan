@@ -111,6 +111,26 @@ toucan-motion generate --topic "how a shopping site works" --mock   # no key, no
 toucan-motion check    --html out/shop.html --engine freeform       # re-run the gate
 ```
 
+Revise an existing animation with a follow-up (session / chat) — a surgical edit
+that changes only what you ask and preserves the rest, instead of regenerating
+from scratch:
+
+```bash
+# current HTML + the change -> the full file with just that change applied:
+toucan-motion generate --edit --html out/shop.html --topic "make the accent blue" --provider anthropic
+# carry the prior conversation so earlier requests still hold:
+toucan-motion generate --edit --html out/shop.html --thread convo.txt --topic "add a checkout beat"
+```
+
+`--edit` runs the "editor" prompt (`prompts/system-edit.md`) with the current
+HTML, an optional `--thread` (the conversation so far), and the new request
+(`--topic`); it returns the whole edited file and re-runs the same gate as a
+fresh generation. The result is written to `<current>.edited.html` unless `--out`
+is given, so the source is never clobbered. `--edit --mock` is an identity edit
+(returns the file unchanged) — handy for exercising the pipeline with no key.
+This is the CLI stand-in for what the SaaS does per animation: persist the
+conversation on the `Animation` entity and edit its stored HTML on each follow-up.
+
 Render an MP4 via the capture engines (needs an API key for the chosen provider):
 
 ```bash
@@ -154,6 +174,11 @@ npm run dev -- render --html fixtures/reference.html --out out/ref.mp4
    the model and returns a beat-by-beat script (plain text). This is step (a) of
    the two-step flow: a locked, human-approved plan the animator then realizes.
    `--plan` prints it to stdout and exits — it does **not** touch the animator.
+0b. **edit / editor** (`src/generate.ts`) — `editHtml({currentHtml, request, thread, …})`,
+   reached via `generate --edit`. Sends `prompts/system-edit.md` + the current
+   HTML + the conversation + the new request, and returns the full file with only
+   that change applied — then re-runs the freeform gate. This is the session/chat
+   follow-up path: revise, don't regenerate.
 1. **generate** (`src/generate.ts`) — `generateHtml({topic, …, engine, mock})`.
    With `--mock` it returns the engine's reference fixture verbatim (no API
    key); otherwise it sends the engine's prompt (`prompts/system.md` for seek,
