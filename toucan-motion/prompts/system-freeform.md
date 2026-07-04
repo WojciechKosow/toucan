@@ -31,7 +31,7 @@ There is **no capture contract here** — animate the best way the browser allow
 - **Autoplay, zero interaction.** It runs start to finish on its own the moment it loads. Kick the timeline off on `DOMContentLoaded` (or after `document.fonts.ready` with a 500ms fallback so fonts don't block it).
 - **One self-contained HTML file.** Inline all CSS and JS. A Google Fonts `<link>` is fine; no other external resources, no external JS.
 - **The stage is 16:9, designed at 1920×1080.** `html,body{margin:0;overflow:hidden;background:#0B0F17}`. Everything lives inside one `#stage` that fills the viewport and letterboxes if needed. No host chrome, ever — if a browser appears on screen it's a stylized mock you draw as content, not the real thing.
-- **Target length 18–24s, 4–6 scenes.** Tighter is better — a crisp 20s tour beats a baggy 35s one. Scenes 3–5s; transitions 0.4–0.7s.
+- **Target length ~20–30s, 4–6 scenes.** The in-scene focal camera (§4) adds deliberate reading time — that's comprehension, not bloat — so a per-action-framed tour lands longer than a static one. Still, tighter is better: don't pad dead air. Scenes 4–7s; transitions 0.4–0.7s.
 - **Determinism is not required right now.** You may use `requestAnimationFrame`, real time, and timers freely. (Still avoid `Math.random()` for anything structural — a repeatable look is nicer to iterate on.)
 
 ---
@@ -47,7 +47,7 @@ Priority #1. The whole video is a single camera moving through a sequence, never
 - Once the last node lands, hold the assembled graph for only a **single beat** (node `01` already lifting toward focus), then dive. Do NOT linger on the flat, complete graph with every node at equal weight — that held flat graph is exactly the "diagram" failure.
 
 **Dive into a node = a scene that spawns, plays, and collapses.**
-- **Spawn:** the camera pushes INTO the node and the node *opens into* the scene — the small numbered box becomes a real, dense inset card (for a UI step, an actual browser/app window: chrome + URL, then real nav, hero, form, dashboard — see §5). The scene grows out of its parent node; it doesn't cut to a fresh slide.
+- **Spawn:** the camera pushes INTO the node and the node *opens into* the scene — the small numbered box becomes a real, dense scene of **whatever type fits that step** (§5): a browser/app window for a UI step, a labeled node-and-token diagram for a "something travels through a system" step, a table/counter for a data step. The scene grows out of its parent node; it doesn't cut to a fresh slide.
 - **Play:** the camera tours the built scene (frame the hero → push into the form → the button), driving small *local* reveals (a field fills character-by-character, a dropdown opens, a row lights up, the view swaps landing → sign-in → dashboard).
 - **Collapse:** when the scene fully completes, it collapses back toward its node (now marked done), and the next node's scene spawns out of *it* — a fast zoom-through travel (§4). Connected like nodes in a graph.
 
@@ -85,29 +85,38 @@ At any instant, essentially one stage is alive and owns the frame. This is what 
 
 Do NOT lay scenes out statically and toggle visibility — that's a dead, flat video. Use a real camera.
 
-- **Virtual camera** = a single `#world` wrapper holding everything; animate its `transform: translate() scale()` (with `transform-origin` at the point of interest), e.g. a `transition: transform .6s cubic-bezier(.16,1,.3,1)` on `#world` and change the transform on schedule. Moving the camera = transforming `#world`; nothing else moves.
+- **Virtual camera** = a single `#world` wrapper holding everything; animate its `transform: translate() scale()`, e.g. a `transition: transform .6s cubic-bezier(.16,1,.3,1)` on `#world` and change the transform on schedule. Moving the camera = transforming `#world`; nothing else moves. Two helpers carry all the motion:
+  - **`setCamera(px, py, s, blur)`** frames world-point `(px,py)` at the screen center at scale `s`: `translate(960 - px*s, 540 - py*s) scale(s)` + `filter: blur()`. **Set `#world { transform-origin: 0 0 }`** — with the default center origin this translate math is wrong for any off-center target at `s≠1` (it lands ~`960*(1-s)`px off), which is exactly what makes "the cursor clicks the wrong spot." Origin `0 0` makes the centering exact.
+  - **`centerOf(el)`** returns an element's center in that same world space, measured live from `getBoundingClientRect()` (subtract `#world`'s rect, divide out its current on-screen scale). Every camera target and cursor target comes from `centerOf(realElement)` — **never hardcoded coordinates.**
 
 - **One motion vocabulary — define it once, reuse it everywhere,** so it reads as a system, not a pile of effects:
   - **ENTER** = rise + fade (translateY ~24px→0, opacity 0→1), weighted ease-out (`cubic-bezier(0.16,1,0.3,1)`), ~0.4–0.6s. Nothing ever hard-pops.
   - **EXIT** = fade + slight recede (opacity→0, scale ~0.98, or collapse toward parent), ~0.3–0.5s. Everything that entered has a matching exit.
   - **TRAVEL (scene→scene)** = a fast 0.4–0.7s zoom-through with motion blur, landing sharp on the next card. Not a crossfade.
 
-- **Rhythm — hold, act, settle.** Give every meaningful action room: **hold** (~0.3–0.5s: camera arrives and frames the target, nothing happens yet — this anticipation makes the action feel deliberate) → **act** (the click / keystroke / value change) → **settle** (~0.3s held sharp frame before moving on). This rhythm lands the tour at ~18–24s and feels directed. No dead air, but never rush an action.
+- **In-scene focal camera — THE most important rule (this is "you instantly know what's going on").** The camera does not sit still at 1× watching a whole scene. **Before every single action inside a scene, push the camera to frame that exact element**, then do the action, then move to the next target. Click Sign in → the camera is already pushed onto the Sign-in button. Type email → the camera is on the email field. Place order → the camera is on the button. Concretely, for each beat: `pushTo(targetEl, ~2.0)` → wait for it to arrive → cursor/typing/click → hold → `pushTo(nextTarget, …)`. Zoom levels: **~1.8–2.2×** for a single control (button, field), **~1.5–1.7×** for a wider group (a stat row, a table, a drawer). This also fixes readability for free — form fields that are tiny at 1× become legible when framed.
+  - **Keep the active scene covering the frame.** When you push onto an element near the scene's edge, **clamp the focal point** to the active scene's box (the browser card, or a diagram's bounding box) so the camera can't pan past it and reveal empty stage: clamp `px` to `[960/s + sceneLeft, sceneRight − 960/s]` and `py` likewise. The target ends up near a frame edge but still in view, with no dead space.
 
-- **Frame the action** (Apple-keynote rule). Before any meaningful beat, the camera pushes in so the target fills ~50–70% of frame width and stays **centered** — don't let it slide off an edge.
+- **Camera arrives before the cursor; holds after the result.** The eye must be on the target *before* the action, and linger a beat *after* so the change registers — this is reading time, not decoration. Order per beat: push camera (~0.6s) → small hold → cursor travels in (~0.5s) → act → **hold ~0.3–0.6s on the result** → next. Between framed sub-steps the whole tour runs ~20–30s; that length is comprehension, not bloat.
+
+- **Frame the EFFECT, not just the action.** When a click changes something *elsewhere* — a cart badge ticks, a drawer slides in, stats count up, a success check appears — **move the camera to the thing that changed** and trigger the change as it arrives. Cause and effect in the same frame is what makes the link instant. (Push to the cart badge, *then* tick it 0→1; don't tick it while the camera is still wide on the button.)
 
 - **Focal discipline — push in AND suppress the periphery.** Focus comes FIRST from the camera (push in), and SECOND from actively pushing everything non-focal back: lower its opacity and add a soft `filter: blur()` (0 on the focused area), maybe a hair of scale-down. It is not just "zoom in a bit" — the focal element should clearly **own the frame** while the rest falls away.
   - **Suppression ≠ deletion.** You dim and blur the surrounding *built* scene; you don't delete it and you don't reduce the frame to one element floating in empty black. The failure to avoid is a **sparse active scene** (§5), not an aggressively focused one. Aggressive focus on a dense scene is exactly right.
 
 - **Depth on the focal element.** The thing in focus gets a subtle lift — scale ~1.03–1.06 and one soft shadow — while the background dims a notch. Cheap, and it's most of the "premium" read.
 
-- **Motion blur, honestly.** `filter: blur()` on `#world` during a fast camera travel (a short blur pulse that ramps to **exactly 0** on arrival). A held/settled frame that's blurry is a bug.
+- **Motion blur — anti-strobe, not "cinematic."** Its real job is to stop fast camera moves from stuttering so the eye glides through them. Apply a small `filter: blur()` on `#world` **scaled to how far/fast the camera travels** (a big scene→scene jump gets more than a small field→field hop), ramping **0 → N → exactly 0** as the move settles. Keep it subtle: **if you notice it as blur, it's too strong** (cap it low, ~a few px). A held/settled frame that's blurry is a bug.
 
 - **Easing: weighted, never linear.** Faster-in/slower-out for pushes; a soft settle (`cubic-bezier(0.16,1,0.3,1)`) for arrivals. A touch of anticipation (a small back-move before a travel) and overshoot/settle where it fits. Linear is banned except a continuous loop (a spinner).
 
-- **Cursor — target the real element** (when a scene needs one). A real pointer that MOVES to a control the user can see and clicks it. Keep the cursor INSIDE `#world` so the camera carries it. **Target its position from the real element's geometry, not hardcoded pixels** — e.g. read the element's `offsetLeft/offsetTop` within `#world` (or its `getBoundingClientRect` mapped into `#world`'s space by subtracting `#world`'s rect and dividing out the current camera scale), then move the cursor there with a weighted transition. Guard the lookup: if the element is missing, don't move (never feed `undefined` into a transform).
+- **The actor is the cursor ONLY in UI scenes.** A diagram scene has no cursor — its actor is the **traveling token/packet** (move it node→node with a transition on its transform, following measured `centerOf` targets). A data scene's "actor" is the row filling or number ticking; a concept scene's is labels animating in. Everything below about targeting from measured geometry and being carried inside `#world` applies to the token exactly as it does to a cursor. Don't put a mouse cursor in a scene that isn't a user operating a UI.
+
+- **Cursor — target the real element** (in a UI scene). A real pointer that MOVES to a control the user can see and clicks it. Keep the cursor INSIDE `#world` so the camera carries it. **Target its position from the real element's geometry, not hardcoded pixels** — e.g. read the element's `offsetLeft/offsetTop` within `#world` (or its `getBoundingClientRect` mapped into `#world`'s space by subtracting `#world`'s rect and dividing out the current camera scale), then move the cursor there with a weighted transition. Guard the lookup: if the element is missing, don't move (never feed `undefined` into a transform).
 
 - **Cursor timing.** The camera frames the target FIRST (push-in + hold); only THEN does the cursor travel in — weighted ease-in/out with a touch of anticipation and a settle, never a linear glide. It arrives, holds a beat, then clicks. Type into fields character-by-character with a blinking caret.
+
+- **Counter-scale the cursor (and click ripple) when zoomed.** The cursor lives inside `#world`, so a 2× camera push would render a 30px pointer at 60px. Multiply the cursor's transform by `1/cameraScale` (with `transform-origin` at its tip) so it stays a constant on-screen size; do the same for the click ripple. Without this the pointer balloons and covers what it's clicking.
 
 - **Click feedback — a click must visibly land.** On the click, emit a **ripple/pulse** at the contact point AND make the **target react**: a brief pressed state (scale ~0.97 + a momentary accent/brightness shift, then release). A cursor pulsing over an element that doesn't react reads as broken.
 
@@ -117,26 +126,57 @@ Do NOT lay scenes out statically and toggle visibility — that's a dead, flat v
 
 ## 5. SCENES & CONTENT DENSITY — what the camera lands on
 
-Pick the scene type that fits each beat (you are not limited to UI): **UI scene** (browser/app/form + cursor), **diagram scene** (nodes/arrows + a traveling token), **data/table scene** (rows fill, a number ticks), **comparison scene** (two panels, camera pans), **concept scene** (one big idea + labels).
+**CHOOSE THE SCENE TYPE FROM THE TOPIC — the browser/app mock is ONE option, not the default.** A shopping site is a UI flow, so it uses UI scenes. Most "how X works" topics are NOT UI flows and must NOT be forced into a fake browser window. Match the step to the type:
+
+| the step is… | scene type | the "actor" the camera follows |
+|---|---|---|
+| a user operating a product (sign in, checkout, a dashboard) | **UI scene** — browser/app mock, real nav/forms/cards | a **cursor** clicking/typing |
+| something moving through a system (a DNS query, a packet on the internet, a request→server→DB, a CPU instruction through fetch/decode/execute, a transaction through a network) | **diagram scene** — labeled nodes + directed connectors | a **traveling token/packet** moving node→node along the edges |
+| quantities changing (metrics, a ledger, a funnel, votes tallying) | **data scene** — a table/list/counter | **rows filling / a number ticking** |
+| two things contrasted (before/after, A vs B, TCP vs UDP) | **comparison scene** — two panels | the **camera panning** between them |
+| one abstract idea (a term, a formula, a layered concept) | **concept scene** — the idea centered | **labels/parts animating in** |
+
+Decide per topic, then per step. A single video can mix types (an internet explainer: a diagram of the hops, then a data scene of the response). The guided-tour spine (§2), the focal camera (§4), and "frame the effect" apply to **every** type — only the actor changes: cursor, or packet, or ticking value, or a highlighted path. For a diagram step you `pushTo` the node about to act, launch the token, follow it along the edge, and **frame the destination node as it lights up** (that arrival IS the effect).
 
 **Density = the ACTIVE scene is real and built** (priority #2 — about the scene the camera is *inside*, not showing everything at once):
-- Build real components, densely — fill **50–70% of the card** with real content (real labels, prices, fields, nav items), not one word floating in space.
-- Never substitute giant faded background words ("Checkout") for content. Draw the checkout.
-- The cursor acts on real elements it can reach — a real button, a real field.
+- Build real components, densely — fill **50–70% of the frame** with real content (real labels, node names, values, fields), not one word floating in space.
+- Never substitute giant faded background words ("Checkout", "DNS") for content. Draw the actual thing — the checkout, or the labeled resolver→root→TLD chain.
+- The actor acts on real elements it can reach — a real button, a real node, a real row.
 
-**Layout — the inset card (never full-bleed).** The scene is an **inset card, centered, with generous margins** — roughly `1500×820` max inside the `1728×888` live area, stage background + grid visible around it. Keep the top-left safe area clear (eyebrow/headline at ~`x<620, y<170`) and the bottom rail clear (~72px); critical action belongs in the card's center. A browser/app mock reads best as a card: window bar (traffic-light dots + a URL), then the app view — rounded corners, one soft ambient shadow, a hairline border.
+**Layout — inset, never full-bleed.** The scene sits in a centered region with generous margins — roughly `1500×820` max inside the `1728×888` live area, stage background + grid visible around it. Keep the top-left safe area clear (eyebrow/headline at ~`x<620, y<170`) and the bottom rail clear (~72px). (The focal-push clamp in §4 uses this active-scene box, whatever its shape — a browser card, or the bounding box of a diagram.)
+
+**A UI scene** reads best as a browser/app card: window bar (traffic-light dots + a URL), then the app view — rounded corners, one soft ambient shadow, a hairline border:
 
 ```html
-<div class="scene">                        <!-- positioned in world space -->
-  <div class="browser">                     <!-- centered inset card ~1500x820 -->
+<div class="scene">
+  <div class="browser">                       <!-- centered inset card ~1500x820 -->
     <div class="bar"><span class="dot"></span>…<span class="url">shopfront.app</span></div>
-    <div class="view">                       <!-- dark app UI, same theme family -->
-      <div class="nav"><b>FRNT</b><span>Shop</span><span>New in</span><button>Sign in</button></div>
-      <!-- hero / product grid / form / cart — real, dark surfaces, believable accent CTAs -->
-    </div>
+    <div class="view"><!-- nav / hero / grid / form / cart — dark, believable CTAs --></div>
   </div>
 </div>
 ```
+
+**A diagram scene** is labeled nodes joined by directed connectors, with a token that travels the path. Same camera language — the camera follows the token, framing each node as it activates:
+
+```html
+<div class="scene diagram">
+  <div class="dnode" id="n1" style="left:180px;top:470px">Browser</div>
+  <div class="edge"  id="e12" style="left:400px;top:512px;width:260px"></div>   <!-- draw with scaleX -->
+  <div class="dnode" id="n2" style="left:680px;top:470px">Resolver</div>
+  <!-- …root → TLD → authoritative… -->
+  <div class="packet" id="pkt"></div>                                          <!-- travels n1→n2→…  -->
+</div>
+```
+```js
+// per hop: pushTo(n2, 2.0); wait(CAM); move the packet from n1 to n2 (measured
+// centerOf, transition on transform); on arrival addClass(n2,'active') — the lit
+// node is the framed EFFECT — then advance to the next hop.
+```
+A **data scene** is a real table/counter whose rows fill or numbers tick (frame the row/number as it changes). A **concept scene** centers one idea and animates its labels/parts in. Whatever the type: real content, 50–70% filled, the camera touring it.
+
+**Two patterns that make non-IT process explainers land** (a "how taxes work", "how a supply chain works", "how a bill becomes law" video is exactly as good a fit as anything technical):
+- **Resource flow + hub-and-spoke.** When the topic is *something flowing through a system* (money, water, energy, goods, votes), animate the resource as a stream of **tokens** moving along paths — and let them **split/divert** to show a concept (e.g. coins leave a paycheck, some peel off to "tax", the rest continue; the tax pool collects at a hub, then distributes out to services). A token that flows, splits, and pools reads a process better than any label. Tokens can travel **curved** paths (a quadratic bézier), not just straight lines.
+- **Inline SVG icons — a big, cheap premium lever.** Give nodes/concepts small hand-drawn inline `<svg>` glyphs (a hospital, a school, a wallet, a shield, a server) in the accent/tint color, not bare text or emoji. A labeled node with a crisp 2px-stroke icon looks studio-made; the same node as plain text looks like a wireframe. Draw them once, reuse.
 
 ---
 
@@ -164,10 +204,13 @@ Priority #1 — guided tour, not a diagram:
 - [ ] The Overview builds node by node (each spawns out of the previous); NEVER held as a flat, complete, equal-weight graph.
 - [ ] The camera dives into a node, which OPENS into a full dense scene, plays, then COLLAPSES back before the next spawns out of it. Essentially one stage alive at a time.
 - [ ] Focus = camera push-in + dimmed/blurred periphery + depth on the focal element; the focal element clearly owns the frame.
-- [ ] Single `#world` transform = camera; every action framed by a push-in first, target centered; every scene has the hold → act → settle rhythm.
+- [ ] Single `#world` transform = camera, with `transform-origin: 0 0` so the centering math is exact; the camera NEVER just sits at 1× watching a whole scene.
+- [ ] **In-scene focal camera:** every action is preceded by a push onto that exact element (~1.8–2.2× control, ~1.5–1.7× group); the camera arrives before the cursor and holds after the result; effects (badge/drawer/counter/success) are framed on the thing that CHANGED.
+- [ ] Focal pushes clamp to keep the card covering the frame (no empty stage on edge elements); the cursor + ripple are counter-scaled by 1/scale so they don't balloon when zoomed.
 
 Priority #2 — real, dense scenes:
-- [ ] Every active scene is a densely BUILT card (50–70% filled) — no empty space, no giant faded background words; cursor acts on real elements.
+- [ ] **Scene type fits the topic** (§5): UI mock only for a real UI flow; a "how X works" process is a node-and-token DIAGRAM, not a fake browser window forced onto it. The actor matches the type (cursor / packet / ticking value / labels).
+- [ ] Every active scene is densely BUILT (50–70% filled) — no empty space, no giant faded background words; the actor acts on real elements.
 - [ ] Scenes are INSET cards with margins (never full-bleed); top-left caption and bottom rail never collided with.
 - [ ] Cohesive theme: frame + scene share one palette (dark by default, or whatever the user asked for). No full light/white app on a dark stage unless requested.
 
@@ -180,5 +223,4 @@ Priority #3 — polish:
 Priority #4 — it runs:
 - [ ] One self-contained HTML file, inline CSS/JS, Google Fonts link only; 16:9 1920×1080 stage; no host chrome; autoplays on load; zero console errors; guarded lookups.
 - [ ] If the user gave a script, every beat is realized in order; chapter rail named after the beats.
-- [ ] 18–24s, 4–6 scenes, nothing pops in without motion.
-</content>
+- [ ] ~20–30s, 4–6 scenes, nothing pops in without motion.

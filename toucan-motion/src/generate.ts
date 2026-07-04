@@ -35,10 +35,12 @@ const PROMPT_PATHS: Record<GenEngine, string> = {
 const MOCK_PATHS: Record<GenEngine, string> = {
   seek: fileURLToPath(new URL("../fixtures/reference.html", import.meta.url)),
   vt: fileURLToPath(new URL("../fixtures/css-anim.html", import.meta.url)),
-  // css-anim.html autoplays in a plain browser (no __TOUCAN_RECORDER__), so it
-  // exercises the freeform path too until a dedicated freeform fixture exists.
+  // A full guided-tour reference: the diagram/token explainer (DNS) — a non-UI
+  // process, in-scene focal camera, traveling packet, node activation. Proves
+  // the freeform path handles any process, not just UI flows. (A UI-flow
+  // reference lives at fixtures/freeform-ui.html.)
   freeform: fileURLToPath(
-    new URL("../fixtures/css-anim.html", import.meta.url),
+    new URL("../fixtures/freeform-diagram.html", import.meta.url),
   ),
 };
 
