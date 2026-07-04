@@ -1,0 +1,51 @@
+[fast zoom with motion blur, first block: "How Taxes Work"]
+[A person receives a salary notification on their phone]
+[Camera zooms into the notification]
+[Money appears as animated coins entering the person's wallet]
+[Part of the coins automatically split off]
+[Label appears: "Taxes"]
+[Camera follows the tax coins]
+[Everything behind becomes blurred during transition]
+[We arrive at a large government treasury building]
+[Tax coins enter the building]
+[Building becomes transparent]
+[Camera travels inside]
+[Money flows into a central pool]
+[The pool splits into multiple animated paths]
+[Fast transition to first destination]
+[Hospital appears]
+[Doctors, nurses and patients animate into the scene]
+[Tax money fills the hospital with equipment and staff]
+[Fast zoom transition]
+[School appears]
+[Students enter classrooms]
+[Teachers appear]
+[Books, computers and desks animate into place]
+[Tax money flows into the school]
+[Fast zoom transition]
+[Road construction]
+[Broken road transforms into a new highway]
+[Construction vehicles animate while tax money powers the progress]
+[Fast zoom transition]
+[Police and firefighters]
+[Emergency vehicles receive equipment]
+[Tax money flows into public safety]
+[Camera zooms out]
+[All previous scenes connect back to the central treasury using glowing lines]
+[Final overview]
+Citizen
+    ↓
+Pays Taxes
+    ↓
+Government Budget
+    ↓
+Healthcare
+Education
+Roads
+Public Safety
+Infrastructure
+[Everything animates simultaneously]
+[Final text]
+"Taxes collect money from many people and help fund public services used by everyone."
+[Slow zoom out]
+[Fade to white]
