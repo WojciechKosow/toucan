@@ -42,6 +42,7 @@ import {
   repair,
   resolveProvider,
 } from "./generate.js";
+import { addUsage, formatUsageLine, type Usage } from "./usage.js";
 import {
   validateFile,
   validateHtml,
@@ -270,8 +271,10 @@ async function generateCmd(flags: Flags): Promise<void> {
   let script: string | undefined;
   if (flags.script) script = await readFile(flags.script, "utf8");
   await mkdir(dirname(outPath), { recursive: true });
+  // Accumulated token usage across generation + any repair pass (cost telemetry).
+  let usage: Usage | null = null;
   try {
-    const html = await generateHtml({
+    const result = await generateHtml({
       topic: flags.topic,
       script,
       provider,
@@ -279,7 +282,8 @@ async function generateCmd(flags: Flags): Promise<void> {
       engine: "freeform",
       mock: flags.mock,
     });
-    await writeFile(outPath, html, "utf8");
+    usage = addUsage(usage, result.usage);
+    await writeFile(outPath, result.html, "utf8");
     console.log(`  wrote ${outPath}`);
   } catch (err) {
     if (err instanceof GenerationError) {
@@ -305,7 +309,8 @@ async function generateCmd(flags: Flags): Promise<void> {
         model: flags.model,
         engine: "freeform",
       });
-      await writeFile(outPath, fixed, "utf8");
+      usage = addUsage(usage, fixed.usage);
+      await writeFile(outPath, fixed.html, "utf8");
     } catch (rerr) {
       if (rerr instanceof GenerationError) {
         const rawPath = outPath.replace(/\.html?$/i, "") + ".raw.txt";
@@ -323,6 +328,8 @@ async function generateCmd(flags: Flags): Promise<void> {
       `Freeform gate FAILED for ${outPath} (file kept for inspection — open it in a browser with DevTools).`,
     );
   }
+  // One parseable cost line the orchestrator reads + persists (real runs only).
+  if (usage) console.log(formatUsageLine("generate", usage));
   console.log(
     `\nPASS — ${outPath}\nopen it in a browser to watch the animation`,
   );
@@ -363,7 +370,7 @@ async function renderCmd(flags: Flags): Promise<void> {
     htmlPath = join(workDir, "index.html");
     await mkdir(workDir, { recursive: true });
     try {
-      const html = await generateHtml({
+      const { html } = await generateHtml({
         topic: flags.topic!,
         script,
         provider,
@@ -400,7 +407,7 @@ async function renderCmd(flags: Flags): Promise<void> {
     console.log(`auto-repairing once (${provider})…`);
     const broken = await readFile(htmlPath, "utf8");
     try {
-      const fixed = await repair({
+      const { html: fixed } = await repair({
         brokenHtml: broken,
         error: msg,
         provider,

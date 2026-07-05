@@ -16,6 +16,8 @@ public class AnimationDTO {
     private UUID id;
     private String prompt;
     private AnimationStatus status;
+    /** Public URL of the hosted, running HTML preview (the v0.1 deliverable). */
+    private String previewUrl;
     private String mp4Url;
     private String posterUrl;
     private Long durationMs;

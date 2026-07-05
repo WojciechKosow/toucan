@@ -48,6 +48,13 @@ public class Animation {
     /** Rendered video duration in milliseconds. */
     private Long durationMs;
 
+    /**
+     * Token usage + cost telemetry from the HTML engine, stored verbatim as the engine's
+     * {@code usage[generate]} JSON. Billing-prep only (author + cost per generation); no Stripe yet.
+     */
+    @Column(columnDefinition = "text")
+    private String engineUsageJson;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private AnimationStatus status;
