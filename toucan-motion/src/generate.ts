@@ -144,11 +144,41 @@ function stripFences(text: string): string {
     .trim();
 }
 
+// Rough USD list prices per 1M tokens (input, output) — for the cost ESTIMATE
+// logged after each real call. List rates (ignores promos); only models we can
+// price authoritatively appear here, others log tokens with no $ figure.
+const PRICING_PER_MTOK: Record<string, { in: number; out: number }> = {
+  "claude-opus-4-8": { in: 5, out: 25 },
+  "claude-sonnet-5": { in: 3, out: 15 },
+};
+
+/** Log token usage (+ a rough cost estimate) for one real model call, to stderr
+ *  so it never pollutes stdout (e.g. the script printed by `generate --plan`).
+ *  These are the real numbers to optimize against — output usually dominates. */
+function logUsage(
+  label: string,
+  provider: Provider,
+  model: string,
+  inTokens: number,
+  outTokens: number,
+  cachedInTokens = 0,
+): void {
+  const price = PRICING_PER_MTOK[model];
+  const est = price
+    ? `  ≈ $${((inTokens * price.in + outTokens * price.out) / 1_000_000).toFixed(3)}`
+    : "";
+  const cached = cachedInTokens ? ` (${cachedInTokens} cached)` : "";
+  console.error(
+    `  usage[${label}] ${provider}/${model}: ${inTokens} in${cached}, ${outTokens} out${est}`,
+  );
+}
+
 async function callModel(
   provider: Provider,
   model: string,
   system: string,
   userText: string,
+  label: string,
 ): Promise<string> {
   if (provider === "openai") {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -166,6 +196,9 @@ async function callModel(
         { role: "user", content: userText },
       ],
     });
+    const u = completion.usage;
+    if (u)
+      logUsage(label, provider, model, u.prompt_tokens, u.completion_tokens);
     return completion.choices[0]?.message?.content ?? "";
   }
 
@@ -185,6 +218,15 @@ async function callModel(
     messages: [{ role: "user", content: userText }],
   });
   const message = await stream.finalMessage();
+  const u = message.usage;
+  logUsage(
+    label,
+    provider,
+    model,
+    u.input_tokens,
+    u.output_tokens,
+    u.cache_read_input_tokens ?? 0,
+  );
   return message.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
@@ -219,7 +261,7 @@ export async function generateHtml(opts: GenerateOptions): Promise<string> {
     "utf8",
   );
   const userText = opts.script ? `${opts.topic}\n\n${opts.script}` : opts.topic;
-  const raw = await callModel(provider, model, system, userText);
+  const raw = await callModel(provider, model, system, userText, "generate");
   return finalize(raw, "Generated output");
 }
 
@@ -236,7 +278,7 @@ export async function generateScript(opts: ScriptOptions): Promise<string> {
   const provider = resolveProvider(opts.provider);
   const model = opts.model ?? DEFAULT_MODELS[provider];
   const system = await readFile(opts.promptPath ?? SCRIPT_PROMPT_PATH, "utf8");
-  const raw = await callModel(provider, model, system, opts.topic);
+  const raw = await callModel(provider, model, system, opts.topic, "plan");
   const script = stripFences(raw);
   if (!script.trim()) {
     throw new GenerationError("Generated script was empty.", raw);
@@ -268,7 +310,7 @@ export async function editHtml(opts: EditOptions): Promise<string> {
     "--- CHANGE REQUESTED ---",
     opts.request,
   ].join("\n");
-  const raw = await callModel(provider, model, system, userText);
+  const raw = await callModel(provider, model, system, userText, "edit");
   return finalize(raw, "Edited output");
 }
 
@@ -299,6 +341,6 @@ export async function repair(opts: RepairOptions): Promise<string> {
     "--- BROKEN HTML ---",
     opts.brokenHtml,
   ].join("\n");
-  const raw = await callModel(provider, model, system, userText);
+  const raw = await callModel(provider, model, system, userText, "repair");
   return finalize(raw, "Repair output");
 }
