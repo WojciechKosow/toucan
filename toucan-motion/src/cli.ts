@@ -38,6 +38,7 @@ import {
   PROVIDERS,
   type GenEngine,
   type Provider,
+  editHtml,
   generateHtml,
   repair,
   resolveProvider,
@@ -53,6 +54,8 @@ interface Flags {
   topic?: string;
   script?: string;
   html?: string;
+  message?: string;
+  thread?: string;
   model?: string;
   provider?: string;
   engine?: string;
@@ -67,6 +70,8 @@ const VALUE_FLAGS: Record<string, keyof Flags> = {
   "--topic": "topic",
   "--script": "script",
   "--html": "html",
+  "--message": "message",
+  "--thread": "thread",
   "--model": "model",
   "--provider": "provider",
   "--engine": "engine",
@@ -83,6 +88,7 @@ const USAGE = `toucan-motion — topic -> explainer animation (v0.1)
 
 Usage:
   toucan-motion generate --topic "<topic>" [--out <file.html>] [options]
+  toucan-motion edit  --html <current.html> --message "<change>" --out <file.html> [options]
   toucan-motion render --topic "<topic>" --out <file.mp4> [options]
   toucan-motion render --html <file.html> --out <file.mp4> [options]
   toucan-motion check  --html <file.html> [--engine seek|vt|freeform]
@@ -97,6 +103,16 @@ generate — topic -> ANIMATION HTML (the current product; open it in a browser)
   Uses the freeform engine: natural CSS/JS animation, autoplay, NO capture
   contract. Gated by a self-containment check + a headless smoke test (zero
   uncaught errors, real DOM, visible motion); one auto-repair pass on failure.
+
+edit — current HTML + a request -> corrected ANIMATION HTML (change only what's asked):
+  --html <file>      The current animation to edit (required).
+  --message <text>   What to change this turn (required).
+  --out <file.html>  Output HTML path (required).
+  --thread <file>    Prior user messages, for context (optional).
+  --mock             Rotate a reference fixture instead of the API (no key, no spend).
+  --provider <name>  openai | anthropic (default: openai, or whichever key is set).
+  --model <id>       Model id (default: ${DEFAULT_MODELS.openai} for openai, ${DEFAULT_MODELS.anthropic} for anthropic).
+  Same freeform gate + one auto-repair pass as generate.
 
 render — topic/HTML -> MP4 (capture engines only):
   --topic <text>     Topic to explain (required unless --html).
@@ -120,6 +136,7 @@ check:
 Examples:
   toucan-motion generate --topic "how a shopping site works" --out out/shop.html
   toucan-motion generate --topic "how a shopping site works" --mock
+  toucan-motion edit --html out/shop.html --message "make it denser" --out out/shop-v2.html
   toucan-motion render --topic "how a shopping site works" --mock --out out/mock.mp4
   toucan-motion render --topic "how a shopping site works" --out out/shop.mp4 --engine vt
   toucan-motion check  --html fixtures/reference.html
@@ -335,6 +352,90 @@ async function generateCmd(flags: Flags): Promise<void> {
   );
 }
 
+/** edit — current HTML + a request -> corrected animation HTML (freeform gate).
+ *  The HTML file is the deliverable and is ALWAYS kept, pass or fail. */
+async function editCmd(flags: Flags): Promise<void> {
+  if (!flags.html) fail("edit requires --html <current file>");
+  if (!flags.message) fail("edit requires --message <request>");
+  if (!flags.out) fail("edit requires --out <file.html>");
+  if (flags.provider && !PROVIDERS.includes(flags.provider as Provider))
+    fail(`--provider must be one of: ${PROVIDERS.join(", ")}`);
+  const provider = resolveProvider(flags.provider);
+  const outPath = flags.out;
+
+  const currentHtml = await readFile(flags.html, "utf8");
+  let thread: string | undefined;
+  if (flags.thread) thread = await readFile(flags.thread, "utf8");
+
+  const src = flags.mock
+    ? "mock (rotated reference fixture)"
+    : `${provider}/${flags.model ?? DEFAULT_MODELS[provider]}`;
+  console.log(`editing ${flags.html} — "${flags.message}" (${src})…`);
+  await mkdir(dirname(outPath), { recursive: true });
+  // Accumulated token usage across the edit + any repair pass (cost telemetry).
+  let usage: Usage | null = null;
+  try {
+    const result = await editHtml({
+      currentHtml,
+      message: flags.message,
+      thread,
+      provider,
+      model: flags.model,
+      mock: flags.mock,
+    });
+    usage = addUsage(usage, result.usage);
+    await writeFile(outPath, result.html, "utf8");
+    console.log(`  wrote ${outPath}`);
+  } catch (err) {
+    if (err instanceof GenerationError) {
+      const rawPath = outPath.replace(/\.html?$/i, "") + ".raw.txt";
+      await writeFile(rawPath, err.raw, "utf8");
+      die(`${err.message} Raw model output saved to ${rawPath}`);
+    }
+    throw err;
+  }
+
+  console.log(`gating (self-containment + headless smoke)…`);
+  let result = await freeformGate(outPath);
+
+  // One auto-repair pass — real edits only (a broken mock is our bug).
+  if (!result.ok && !flags.mock) {
+    console.log(`auto-repairing once (${provider})…`);
+    const broken = await readFile(outPath, "utf8");
+    try {
+      const fixed = await repair({
+        brokenHtml: broken,
+        error: result.errors.join("\n"),
+        provider,
+        model: flags.model,
+        engine: "freeform",
+      });
+      usage = addUsage(usage, fixed.usage);
+      await writeFile(outPath, fixed.html, "utf8");
+    } catch (rerr) {
+      if (rerr instanceof GenerationError) {
+        const rawPath = outPath.replace(/\.html?$/i, "") + ".raw.txt";
+        await writeFile(rawPath, rerr.raw, "utf8");
+        die(`Repair failed: ${rerr.message} Raw output saved to ${rawPath}`);
+      }
+      throw rerr;
+    }
+    console.log(`re-gating repaired HTML…`);
+    result = await freeformGate(outPath);
+  }
+
+  if (!result.ok) {
+    die(
+      `Freeform gate FAILED for ${outPath} (file kept for inspection — open it in a browser with DevTools).`,
+    );
+  }
+  // One parseable cost line the orchestrator reads + persists (real runs only).
+  if (usage) console.log(formatUsageLine("edit", usage));
+  console.log(
+    `\nPASS — ${outPath}\nopen it in a browser to watch the animation`,
+  );
+}
+
 async function renderCmd(flags: Flags): Promise<void> {
   if (!flags.out) fail("--out is required");
   if (!flags.html && !flags.topic) fail("either --topic or --html is required");
@@ -452,6 +553,7 @@ async function main(): Promise<void> {
   }
   const flags = parseFlags(argv.slice(1));
   if (cmd === "generate") return generateCmd(flags);
+  if (cmd === "edit") return editCmd(flags);
   if (cmd === "render") return renderCmd(flags);
   if (cmd === "check") return checkCmd(flags);
   fail(`Unknown command: ${cmd}`);

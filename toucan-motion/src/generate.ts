@@ -33,6 +33,18 @@ const PROMPT_PATHS: Record<GenEngine, string> = {
     new URL("../prompts/system-freeform.md", import.meta.url),
   ),
 };
+// The editor prompt (edit an existing file, change only what's asked). Not an
+// engine — a separate system prompt used by editHtml().
+const EDITOR_PROMPT_PATH = fileURLToPath(
+  new URL("../prompts/system-editor.md", import.meta.url),
+);
+// Mock-edit stand-ins: with no API, rotate these freeform references so the
+// preview visibly changes per turn (real semantic editing needs the API).
+const MOCK_EDIT_FIXTURES = [
+  "freeform-taxes.html",
+  "freeform-diagram.html",
+  "freeform-ui.html",
+].map((f) => fileURLToPath(new URL(`../fixtures/${f}`, import.meta.url)));
 const MOCK_PATHS: Record<GenEngine, string> = {
   seek: fileURLToPath(new URL("../fixtures/reference.html", import.meta.url)),
   vt: fileURLToPath(new URL("../fixtures/css-anim.html", import.meta.url)),
@@ -243,4 +255,71 @@ export async function repair(opts: RepairOptions): Promise<GenerateResult> {
   ].join("\n");
   const { text, usage } = await callModel(provider, model, system, userText);
   return { html: finalize(text, "Repair output"), usage };
+}
+
+export interface EditOptions {
+  /** The current, working HTML file to edit (the source of truth). */
+  currentHtml: string;
+  /** The new request (what to change this turn). */
+  message: string;
+  /** Prior user messages in the conversation, newline-joined (optional context). */
+  thread?: string;
+  provider?: Provider;
+  model?: string;
+  /** mock=true returns a reference fixture (rotated by message) — no API, no spend. */
+  mock?: boolean;
+  /** Override the editor system prompt file. */
+  promptPath?: string;
+}
+
+/**
+ * Deterministic mock edit: return a freeform fixture DIFFERENT from the current
+ * file (keyed by the message), so every mock turn visibly changes the preview.
+ * Purely a no-API stand-in — real editing needs the model.
+ */
+async function mockEditHtml(
+  currentHtml: string,
+  message: string,
+): Promise<string> {
+  let h = 0;
+  for (let i = 0; i < message.length; i++)
+    h = (h * 31 + message.charCodeAt(i)) >>> 0;
+  const start = h % MOCK_EDIT_FIXTURES.length;
+  const current = currentHtml.trim();
+  for (let k = 0; k < MOCK_EDIT_FIXTURES.length; k++) {
+    const path = MOCK_EDIT_FIXTURES[(start + k) % MOCK_EDIT_FIXTURES.length];
+    const html = await readFile(path, "utf8");
+    if (html.trim() !== current) return html;
+  }
+  return readFile(MOCK_EDIT_FIXTURES[start], "utf8");
+}
+
+/**
+ * Edit an existing animation: current HTML (+ conversation) + a new request -> one
+ * self-contained HTML string (+ usage). Uses the editor prompt (change only what's
+ * asked). Contract validity is checked separately by the freeform gate.
+ * - mock: returns a reference fixture chosen by the message (no API, no spend).
+ */
+export async function editHtml(opts: EditOptions): Promise<GenerateResult> {
+  if (opts.mock) {
+    return {
+      html: await mockEditHtml(opts.currentHtml, opts.message),
+      usage: null,
+    };
+  }
+  const provider = resolveProvider(opts.provider);
+  const model = opts.model ?? DEFAULT_MODELS[provider];
+  const system = await readFile(opts.promptPath ?? EDITOR_PROMPT_PATH, "utf8");
+  const userText = [
+    "CURRENT FILE:",
+    opts.currentHtml,
+    "",
+    ...(opts.thread ? ["CONVERSATION SO FAR:", opts.thread, ""] : []),
+    "NEW REQUEST:",
+    opts.message,
+    "",
+    "Return the COMPLETE corrected HTML file with this request applied, changing only what it asks.",
+  ].join("\n");
+  const { text, usage } = await callModel(provider, model, system, userText);
+  return { html: finalize(text, "Edit output"), usage };
 }
