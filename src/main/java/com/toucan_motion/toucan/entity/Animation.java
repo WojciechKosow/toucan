@@ -55,6 +55,16 @@ public class Animation {
     @Column(columnDefinition = "text")
     private String engineUsageJson;
 
+    /**
+     * When set, this row is a turn/version inside a {@link Conversation} (the HTML-engine chat flow):
+     * {@link #prompt} is that turn's message, {@link #generatedCode} the HTML it produced. Null for
+     * single-shot animations. FK to {@code conversations.id}.
+     */
+    private UUID conversationId;
+
+    /** 1-based position of this version within its conversation. Null for single-shot animations. */
+    private Integer versionNumber;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private AnimationStatus status;

@@ -19,4 +19,17 @@ public interface AnimationEngine {
      * @throws EngineException if generation fails (bad exit code, timeout, or I/O error)
      */
     EngineResult generate(UUID animationId, String prompt);
+
+    /**
+     * Edit an existing animation: apply {@code message} to {@code currentHtml}, changing only what
+     * the request asks. Used for follow-up turns in a conversation.
+     *
+     * @param conversationId the conversation (used for temp-file naming and logging)
+     * @param currentHtml the current, working HTML (the source of truth to edit)
+     * @param thread prior user messages for context, newline-joined (may be null/blank)
+     * @param message the new request for this turn
+     * @return the corrected HTML plus the model's token-usage/cost telemetry
+     * @throws EngineException if the edit fails (bad exit code, timeout, or I/O error)
+     */
+    EngineResult edit(UUID conversationId, String currentHtml, String thread, String message);
 }

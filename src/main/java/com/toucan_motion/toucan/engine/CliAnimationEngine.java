@@ -21,11 +21,14 @@ import org.springframework.stereotype.Component;
 /**
  * {@link AnimationEngine} that shells out to the standalone {@code toucan-motion} CLI:
  *
- * <pre>node dist/cli.js generate --topic "&lt;prompt&gt;" --out &lt;tmp&gt; [--mock | --provider &lt;p&gt; [--model &lt;m&gt;]]</pre>
+ * <pre>
+ * node dist/cli.js generate --topic "&lt;prompt&gt;" --out &lt;tmp&gt; [--mock | --provider &lt;p&gt; [--model &lt;m&gt;]]
+ * node dist/cli.js edit --html &lt;cur&gt; --message "&lt;req&gt;" [--thread &lt;t&gt;] --out &lt;tmp&gt; [--mock | --provider …]
+ * </pre>
  *
- * <p>Reusing the CLI keeps a single source of truth for the animation prompt, the self-containment +
- * headless-Chromium gate, the one-shot auto-repair pass, and the usage/cost telemetry. The CLI writes
- * the HTML to a temp file (read back here, then deleted) and prints a {@code usage[generate] {json}}
+ * <p>Reusing the CLI keeps a single source of truth for the prompts, the self-containment +
+ * headless-Chromium gate, the one-shot auto-repair, and the usage/cost telemetry. The CLI writes the
+ * HTML to a temp file (read back here, then deleted) and prints a {@code usage[generate|edit] {json}}
  * line to stdout on real runs, which we parse for cost attribution.
  *
  * <p>The subprocess runs with its working directory set to the CLI project (default {@code
@@ -36,7 +39,6 @@ import org.springframework.stereotype.Component;
 public class CliAnimationEngine implements AnimationEngine {
 
     private static final Logger log = LoggerFactory.getLogger(CliAnimationEngine.class);
-    private static final String USAGE_PREFIX = "usage[generate] ";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -68,56 +70,90 @@ public class CliAnimationEngine implements AnimationEngine {
         Path out = null;
         try {
             out = Files.createTempFile("toucan-" + animationId + "-", ".html");
-            List<String> cmd = buildCommand(prompt, out);
+            List<String> cmd = new ArrayList<>(List.of(node, script, "generate", "--topic", prompt));
+            cmd.addAll(List.of("--out", out.toAbsolutePath().toString()));
+            cmd.addAll(modeArgs());
             log.info(
                     "HTML engine generate for {} ({})",
                     animationId,
                     mock ? "mock fixture" : provider + "/" + (model.isBlank() ? "default" : model));
-
-            String output = run(cmd);
-            String html = Files.readString(out, StandardCharsets.UTF_8);
-            if (html.isBlank()) {
-                throw new EngineException("engine produced an empty HTML file");
-            }
-            String usageJson = extractUsageJson(output);
-            EngineUsage usage = parseUsage(usageJson);
-            return new EngineResult(html, usage, usageJson);
+            return invoke(cmd, out);
         } catch (IOException e) {
             throw new EngineException("engine invocation failed: " + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new EngineException("engine invocation interrupted", e);
         } finally {
-            if (out != null) {
-                try {
-                    Files.deleteIfExists(out);
-                } catch (IOException ignored) {
-                    // best-effort temp cleanup
-                }
-            }
+            deleteQuietly(out);
         }
     }
 
-    private List<String> buildCommand(String prompt, Path out) {
-        List<String> cmd = new ArrayList<>();
-        cmd.add(node);
-        cmd.add(script);
-        cmd.add("generate");
-        cmd.add("--topic");
-        cmd.add(prompt);
-        cmd.add("--out");
-        cmd.add(out.toAbsolutePath().toString());
-        if (mock) {
-            cmd.add("--mock");
-        } else {
-            cmd.add("--provider");
-            cmd.add(provider);
-            if (!model.isBlank()) {
-                cmd.add("--model");
-                cmd.add(model);
+    @Override
+    public EngineResult edit(UUID conversationId, String currentHtml, String thread, String message) {
+        Path current = null;
+        Path threadFile = null;
+        Path out = null;
+        try {
+            current = Files.createTempFile("toucan-" + conversationId + "-cur-", ".html");
+            Files.writeString(current, currentHtml, StandardCharsets.UTF_8);
+            out = Files.createTempFile("toucan-" + conversationId + "-", ".html");
+
+            List<String> cmd =
+                    new ArrayList<>(
+                            List.of(
+                                    node,
+                                    script,
+                                    "edit",
+                                    "--html",
+                                    current.toAbsolutePath().toString(),
+                                    "--message",
+                                    message,
+                                    "--out",
+                                    out.toAbsolutePath().toString()));
+            if (thread != null && !thread.isBlank()) {
+                threadFile = Files.createTempFile("toucan-" + conversationId + "-thread-", ".txt");
+                Files.writeString(threadFile, thread, StandardCharsets.UTF_8);
+                cmd.addAll(List.of("--thread", threadFile.toAbsolutePath().toString()));
             }
+            cmd.addAll(modeArgs());
+            log.info(
+                    "HTML engine edit for {} ({})",
+                    conversationId,
+                    mock ? "mock fixture" : provider + "/" + (model.isBlank() ? "default" : model));
+            return invoke(cmd, out);
+        } catch (IOException e) {
+            throw new EngineException("engine invocation failed: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new EngineException("engine invocation interrupted", e);
+        } finally {
+            deleteQuietly(current);
+            deleteQuietly(threadFile);
+            deleteQuietly(out);
         }
-        return cmd;
+    }
+
+    /** The mock/provider tail shared by generate and edit. */
+    private List<String> modeArgs() {
+        if (mock) {
+            return List.of("--mock");
+        }
+        List<String> args = new ArrayList<>(List.of("--provider", provider));
+        if (!model.isBlank()) {
+            args.addAll(List.of("--model", model));
+        }
+        return args;
+    }
+
+    /** Run the command, check the exit code, read the HTML from {@code out}, and parse usage. */
+    private EngineResult invoke(List<String> cmd, Path out) throws IOException, InterruptedException {
+        String output = run(cmd);
+        String html = Files.readString(out, StandardCharsets.UTF_8);
+        if (html.isBlank()) {
+            throw new EngineException("engine produced an empty HTML file");
+        }
+        String usageJson = extractUsageJson(output);
+        return new EngineResult(html, parseUsage(usageJson), usageJson);
     }
 
     /** Run the CLI, draining stdout+stderr on a background thread with a hard timeout. */
@@ -161,13 +197,16 @@ public class CliAnimationEngine implements AnimationEngine {
         return out.toString();
     }
 
-    /** The raw JSON payload of the last {@code usage[generate] {json}} line, or null if absent. */
+    /** The raw JSON of the last {@code usage[<stage>] {json}} line (generate or edit), or null. */
     private static String extractUsageJson(String output) {
         String found = null;
         for (String line : output.split("\n")) {
             String trimmed = line.trim();
-            if (trimmed.startsWith(USAGE_PREFIX)) {
-                found = trimmed.substring(USAGE_PREFIX.length()).trim();
+            if (trimmed.startsWith("usage[")) {
+                int i = trimmed.indexOf("] ");
+                if (i >= 0) {
+                    found = trimmed.substring(i + 2).trim();
+                }
             }
         }
         return found;
@@ -193,6 +232,16 @@ public class CliAnimationEngine implements AnimationEngine {
 
     private static String text(JsonNode n, String field) {
         return n.hasNonNull(field) ? n.get(field).asText() : null;
+    }
+
+    private static void deleteQuietly(Path p) {
+        if (p != null) {
+            try {
+                Files.deleteIfExists(p);
+            } catch (IOException ignored) {
+                // best-effort temp cleanup
+            }
+        }
     }
 
     private static String tail(String s, int lines) {
