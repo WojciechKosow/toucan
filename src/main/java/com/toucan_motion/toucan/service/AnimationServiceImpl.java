@@ -105,6 +105,7 @@ public class AnimationServiceImpl implements AnimationService {
                 .id(a.getId())
                 .prompt(a.getPrompt())
                 .status(a.getStatus())
+                .previewUrl(a.getPreviewUrl())
                 .mp4Url(a.getMp4Url())
                 .posterUrl(a.getPosterUrl())
                 .durationMs(a.getDurationMs())
