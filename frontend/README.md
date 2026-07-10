@@ -1,75 +1,89 @@
-# React + TypeScript + Vite
+# Toucan — web frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A thin React client over the Toucan `/api/conversations` backend: register / log in,
+type a prompt, and watch the generated explainer animation render in a live preview.
 
-Currently, two official plugins are available:
+Stack: **Vite + React + TypeScript**, **react-router-dom**, **@tanstack/react-query**,
+native `fetch`.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## What's in this session
 
-## React Compiler
+- **App shell + routing** — `/login`, `/register`, and the home/generate page (`/`),
+  guarded so an unauthenticated visitor is bounced to `/login`.
+- **API client** (`src/lib/api.ts`) — reads the base URL from `VITE_API_BASE_URL`
+  (default `http://localhost:8080`), attaches `Authorization: Bearer <token>`, and on a
+  `401` clears the token and routes back to `/login`.
+- **Auth** — register, login (stores `{token, user}` in `localStorage`), logout. There's
+  no `/me` endpoint: "has a stored token" means logged-in, and any `401` invalidates it.
+- **Generate** — POST a prompt → poll the conversation (React Query `refetchInterval`,
+  ~1.5s) until it's `READY` → download the version's HTML and render it via
+  `<iframe srcDoc=… sandbox="allow-scripts">`. `FAILED` shows the backend error message.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Not in this session (later): the follow-up edit/chat loop, conversation history/list,
+design polish, payments.
 
-## Expanding the ESLint configuration
+## Run it against the mock backend (keyless)
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+The backend returns a fixture animation for every turn in mock mode, so the whole UI is
+exercised without an API key.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+1. **Postgres** — have a local Postgres running with the DB/role the backend expects
+   (`toucan_motion` / `toucan_motion`, database `toucan_motion`; see
+   `src/main/resources/application.properties`).
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+2. **Backend** (from the repo root) in mock mode:
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+   ```bash
+   mvn spring-boot:run -Dspring-boot.run.arguments="--app.engine.mock=true"
+   ```
 
+   It listens on `http://localhost:8080` with CORS pre-configured for the Vite dev server.
+
+3. **Frontend**:
+
+   ```bash
+   cd frontend
+   npm install
+   npm run dev            # Vite on http://localhost:5173
+   ```
+
+   Optionally copy `.env.example` to `.env` to point at a non-default backend URL.
+
+4. In the browser: **register → enable the user in the DB (below) → log in → type a
+   prompt → watch the animation render** in the preview.
+
+## Dev gotcha — email verification
+
+Registration creates a **disabled** user and the backend blocks login until the account
+is verified. Local dev has no working mail server, so a freshly-registered user can't log
+in yet. Enable the account directly in the database:
+
+```sql
+UPDATE users SET enabled=true WHERE email='you@example.com';
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+The login screen surfaces the backend's "please verify your email" error so this state is
+obvious. (A real verification UI is a later task.)
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+> Note on error messages: the current backend returns a bare `500` for a failed login
+> (Spring hides the exception message by default, and the `server.error.include-message`
+> flag has no effect under Spring Boot 4.1). So the client can't always tell "unverified"
+> from "wrong password". It shows the backend's specific message when one is present, and
+> otherwise a friendly fallback — and the login screen always shows a standing hint about
+> verifying your email, which is the case that matters in local dev.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Preview gotcha — use `srcDoc`, not the hosted URL
 
+Don't iframe the hosted `/preview/{id}` URL: Spring sends `X-Frame-Options: DENY`, which
+blocks framing it. Instead we fetch the current version's HTML with the JWT
+(`GET /api/conversations/{id}/versions/{n}/download`) and render it via `srcDoc`, which
+isn't a cross-origin navigation.
+
+## Scripts
+
+```bash
+npm run dev       # start the dev server
+npm run build     # type-check (tsc -b) + production build
+npm run lint      # eslint
+npm run preview   # preview the production build
 ```
