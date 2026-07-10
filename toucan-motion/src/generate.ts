@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { CaptureEngine } from "./capture.js";
+import type { Usage } from "./usage.js";
 
 export type Provider = "openai" | "anthropic";
 export const PROVIDERS: Provider[] = ["openai", "anthropic"];
@@ -32,6 +33,18 @@ const PROMPT_PATHS: Record<GenEngine, string> = {
     new URL("../prompts/system-freeform.md", import.meta.url),
   ),
 };
+// The editor prompt (edit an existing file, change only what's asked). Not an
+// engine — a separate system prompt used by editHtml().
+const EDITOR_PROMPT_PATH = fileURLToPath(
+  new URL("../prompts/system-editor.md", import.meta.url),
+);
+// Mock-edit stand-ins: with no API, rotate these freeform references so the
+// preview visibly changes per turn (real semantic editing needs the API).
+const MOCK_EDIT_FIXTURES = [
+  "freeform-taxes.html",
+  "freeform-diagram.html",
+  "freeform-ui.html",
+].map((f) => fileURLToPath(new URL(`../fixtures/${f}`, import.meta.url)));
 const MOCK_PATHS: Record<GenEngine, string> = {
   seek: fileURLToPath(new URL("../fixtures/reference.html", import.meta.url)),
   vt: fileURLToPath(new URL("../fixtures/css-anim.html", import.meta.url)),
@@ -102,12 +115,18 @@ function stripFences(text: string): string {
     .trim();
 }
 
+/** A model call's text plus the token usage it reported (for cost telemetry). */
+interface ModelResult {
+  text: string;
+  usage: Usage;
+}
+
 async function callModel(
   provider: Provider,
   model: string,
   system: string,
   userText: string,
-): Promise<string> {
+): Promise<ModelResult> {
   if (provider === "openai") {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -124,7 +143,15 @@ async function callModel(
         { role: "user", content: userText },
       ],
     });
-    return completion.choices[0]?.message?.content ?? "";
+    return {
+      text: completion.choices[0]?.message?.content ?? "",
+      usage: {
+        provider,
+        model,
+        inputTokens: completion.usage?.prompt_tokens ?? 0,
+        outputTokens: completion.usage?.completion_tokens ?? 0,
+      },
+    };
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -143,10 +170,19 @@ async function callModel(
     messages: [{ role: "user", content: userText }],
   });
   const message = await stream.finalMessage();
-  return message.content
+  const text = message.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
     .join("");
+  return {
+    text,
+    usage: {
+      provider,
+      model,
+      inputTokens: message.usage.input_tokens,
+      outputTokens: message.usage.output_tokens,
+    },
+  };
 }
 
 /** Strip fences and reject empty output (the contract itself is gated by
@@ -159,16 +195,25 @@ function finalize(raw: string, what: string): string {
   return html;
 }
 
+/** Generated HTML plus the token usage of the call (null for a mock/no-API run). */
+export interface GenerateResult {
+  html: string;
+  usage: Usage | null;
+}
+
 /**
- * topic -> one self-contained HTML string.
- * - mock: returns the engine's reference fixture verbatim (no API key, no spend).
+ * topic -> one self-contained HTML string (+ token usage for cost telemetry).
+ * - mock: returns the engine's reference fixture verbatim (no API key, no spend,
+ *   so {@code usage} is null).
  * - real: OpenAI/Anthropic call; strip fences; throw (with raw) on empty output.
  * Contract validity is checked separately by validateHtml().
  */
-export async function generateHtml(opts: GenerateOptions): Promise<string> {
+export async function generateHtml(
+  opts: GenerateOptions,
+): Promise<GenerateResult> {
   const engine = opts.engine ?? "seek";
   if (opts.mock) {
-    return readFile(MOCK_PATHS[engine], "utf8");
+    return { html: await readFile(MOCK_PATHS[engine], "utf8"), usage: null };
   }
   const provider = resolveProvider(opts.provider);
   const model = opts.model ?? DEFAULT_MODELS[provider];
@@ -177,8 +222,8 @@ export async function generateHtml(opts: GenerateOptions): Promise<string> {
     "utf8",
   );
   const userText = opts.script ? `${opts.topic}\n\n${opts.script}` : opts.topic;
-  const raw = await callModel(provider, model, system, userText);
-  return finalize(raw, "Generated output");
+  const { text, usage } = await callModel(provider, model, system, userText);
+  return { html: finalize(text, "Generated output"), usage };
 }
 
 const REPAIR_CONTRACT: Record<GenEngine, string> = {
@@ -189,7 +234,7 @@ const REPAIR_CONTRACT: Record<GenEngine, string> = {
 };
 
 /** One-shot repair: hand the broken file + its capture error back to the model. */
-export async function repair(opts: RepairOptions): Promise<string> {
+export async function repair(opts: RepairOptions): Promise<GenerateResult> {
   const engine = opts.engine ?? "seek";
   const provider = resolveProvider(opts.provider);
   const model = opts.model ?? DEFAULT_MODELS[provider];
@@ -208,6 +253,73 @@ export async function repair(opts: RepairOptions): Promise<string> {
     "--- BROKEN HTML ---",
     opts.brokenHtml,
   ].join("\n");
-  const raw = await callModel(provider, model, system, userText);
-  return finalize(raw, "Repair output");
+  const { text, usage } = await callModel(provider, model, system, userText);
+  return { html: finalize(text, "Repair output"), usage };
+}
+
+export interface EditOptions {
+  /** The current, working HTML file to edit (the source of truth). */
+  currentHtml: string;
+  /** The new request (what to change this turn). */
+  message: string;
+  /** Prior user messages in the conversation, newline-joined (optional context). */
+  thread?: string;
+  provider?: Provider;
+  model?: string;
+  /** mock=true returns a reference fixture (rotated by message) — no API, no spend. */
+  mock?: boolean;
+  /** Override the editor system prompt file. */
+  promptPath?: string;
+}
+
+/**
+ * Deterministic mock edit: return a freeform fixture DIFFERENT from the current
+ * file (keyed by the message), so every mock turn visibly changes the preview.
+ * Purely a no-API stand-in — real editing needs the model.
+ */
+async function mockEditHtml(
+  currentHtml: string,
+  message: string,
+): Promise<string> {
+  let h = 0;
+  for (let i = 0; i < message.length; i++)
+    h = (h * 31 + message.charCodeAt(i)) >>> 0;
+  const start = h % MOCK_EDIT_FIXTURES.length;
+  const current = currentHtml.trim();
+  for (let k = 0; k < MOCK_EDIT_FIXTURES.length; k++) {
+    const path = MOCK_EDIT_FIXTURES[(start + k) % MOCK_EDIT_FIXTURES.length];
+    const html = await readFile(path, "utf8");
+    if (html.trim() !== current) return html;
+  }
+  return readFile(MOCK_EDIT_FIXTURES[start], "utf8");
+}
+
+/**
+ * Edit an existing animation: current HTML (+ conversation) + a new request -> one
+ * self-contained HTML string (+ usage). Uses the editor prompt (change only what's
+ * asked). Contract validity is checked separately by the freeform gate.
+ * - mock: returns a reference fixture chosen by the message (no API, no spend).
+ */
+export async function editHtml(opts: EditOptions): Promise<GenerateResult> {
+  if (opts.mock) {
+    return {
+      html: await mockEditHtml(opts.currentHtml, opts.message),
+      usage: null,
+    };
+  }
+  const provider = resolveProvider(opts.provider);
+  const model = opts.model ?? DEFAULT_MODELS[provider];
+  const system = await readFile(opts.promptPath ?? EDITOR_PROMPT_PATH, "utf8");
+  const userText = [
+    "CURRENT FILE:",
+    opts.currentHtml,
+    "",
+    ...(opts.thread ? ["CONVERSATION SO FAR:", opts.thread, ""] : []),
+    "NEW REQUEST:",
+    opts.message,
+    "",
+    "Return the COMPLETE corrected HTML file with this request applied, changing only what it asks.",
+  ].join("\n");
+  const { text, usage } = await callModel(provider, model, system, userText);
+  return { html: finalize(text, "Edit output"), usage };
 }

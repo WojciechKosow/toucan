@@ -29,6 +29,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.scheduling.annotation.AsyncConfigurer;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -38,9 +39,14 @@ import org.springframework.test.web.servlet.MockMvc;
  * completes before assertions. Proves: create → PENDING then GENERATING + a render job + dispatch;
  * the internal callback drives READY (with a stored mp4Url) and FAILED; a dispatch error fails the
  * row; and {@code /api/internal/**} rejects calls without the shared token.
+ *
+ * <p>This exercises the SceneSpec → Remotion path, so it pins {@code app.engine=scenespec}
+ * (the app default is {@code html} — the v0.1 product). The HTML engine path is validated
+ * separately end-to-end; it isn't invoked here.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = "app.engine=scenespec")
 class RenderLifecycleTest {
 
     @TestConfiguration

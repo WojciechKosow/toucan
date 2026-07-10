@@ -25,7 +25,13 @@ import org.springframework.web.server.ResponseStatusException;
  * no real call.
  */
 @SpringBootTest
-@TestPropertySource(properties = "app.ratelimit.generation-cooldown-seconds=3600")
+@TestPropertySource(
+        properties = {
+            "app.ratelimit.generation-cooldown-seconds=3600",
+            // Exercise the mocked SceneSpec renderer, not the HTML engine (the app default), so the
+            // first request's async worker makes no real shell-out — as this test's contract states.
+            "app.engine=scenespec"
+        })
 class GenerationRateLimitTest {
 
     @Autowired private AnimationService animationService;
