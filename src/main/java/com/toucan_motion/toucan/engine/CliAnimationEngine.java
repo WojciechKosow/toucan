@@ -62,7 +62,7 @@ public class CliAnimationEngine implements AnimationEngine {
     @Value("${app.engine.mock:false}")
     private boolean mock;
 
-    @Value("${app.engine.cli.timeout-seconds:300}")
+    @Value("${app.engine.cli.timeout-seconds:900}")
     private long timeoutSeconds;
 
     @Override
