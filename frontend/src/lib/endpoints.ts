@@ -31,6 +31,14 @@ export function startConversation(message: string): Promise<ConversationDTO> {
   });
 }
 
+/** Add a follow-up message that edits the current animation (creates the next version). */
+export function sendConversationMessage(id: string, message: string): Promise<ConversationDTO> {
+  return apiJson<ConversationDTO>(`/api/conversations/${id}/messages`, {
+    method: 'POST',
+    body: { message },
+  });
+}
+
 export function getConversation(id: string): Promise<ConversationDTO> {
   return apiJson<ConversationDTO>(`/api/conversations/${id}`);
 }
